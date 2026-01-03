@@ -1,226 +1,203 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { X, ScanLine } from 'lucide-react';
+import { X, ScanLine, Camera, RefreshCw } from 'lucide-react';
 import Tesseract from 'tesseract.js';
 import Fuse from 'fuse.js';
-import { Spinner } from '../../components/Shared';
+import { Spinner } from '../../components/Shared.jsx';
 
-const REQUIRED_CONSECUTIVE_MATCHES = 3;
-const MATCH_CONFIDENCE_THRESHOLD = 0.85; // Fuse.js score is 0-1, lower is better. 0.15 is a good starting point.
-const SCAN_COOLDOWN = 5; // seconds
+const REQUIRED_CONSECUTIVE_MATCHES = 2; // Lowered slightly for faster mobile feel
+const MATCH_CONFIDENCE_THRESHOLD = 0.85; 
+const SCAN_COOLDOWN = 3; 
 
 const CardScanner = ({ onCardScanned, showMessage }) => {
     const [isScanning, setIsScanning] = useState(false);
-    const [isProcessing, setIsProcessing] = useState(false);
-    const [status, setStatus] = useState('Ready to Scan');
+    const [status, setStatus] = useState('Initializing...');
     const [allCardNames, setAllCardNames] = useState([]);
     const [fuse, setFuse] = useState(null);
-    const [videoDevices, setVideoDevices] = useState([]);
-    const [selectedDeviceId, setSelectedDeviceId] = useState('');
+    const [cameras, setCameras] = useState([]);
+    const [activeCameraId, setActiveCameraId] = useState(null);
+    const [scannedCard, setScannedCard] = useState(null);
     
     const recentReads = useRef([]);
     const lastScanTime = useRef(0);
-
     const videoRef = useRef(null);
     const canvasRef = useRef(null);
+    const streamRef = useRef(null);
 
-    // Load all card names on component mount for fuzzy matching
+    // 1. Load Card Catalog
     useEffect(() => {
         const fetchCardNames = async () => {
             try {
                 const response = await fetch("https://api.scryfall.com/catalog/card-names");
                 const data = await response.json();
-                const names = data.data;
-                setAllCardNames(names);
-                setFuse(new Fuse(names, { threshold: 0.4 }));
-                console.log(`Loaded ${names.length} card names for validation.`);
+                setAllCardNames(data.data);
+                setFuse(new Fuse(data.data, { threshold: 0.4 }));
+                setStatus('Ready to Scan');
             } catch (error) {
-                console.error("Failed to load card names:", error);
-                showMessage("Could not load card name catalog for validation.", "error");
+                showMessage("Failed to load card database.", "error");
             }
         };
         fetchCardNames();
     }, [showMessage]);
 
-    // Get available camera devices
-    useEffect(() => {
-        const getDevices = async () => {
-            try {
-                // We need to get permission first to get device labels
-                await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-                const devices = await navigator.mediaDevices.enumerateDevices();
-                const videoInputs = devices.filter(device => device.kind === 'videoinput');
-                setVideoDevices(videoInputs);
-                if (videoInputs.length > 0) {
-                    // Try to find a back camera first
-                    const backCamera = videoInputs.find(d => d.label.toLowerCase().includes('back') || d.label.toLowerCase().includes('environment'));
-                    if (backCamera) {
-                        setSelectedDeviceId(backCamera.deviceId);
-                    } else {
-                        setSelectedDeviceId(videoInputs[0].deviceId);
-                    }
-                }
-            } catch (error) {
-                console.error("Could not enumerate devices:", error);
-            }
-        };
-        getDevices();
-    }, []);
-
-    const startScan = useCallback(async () => {
-        if (!selectedDeviceId) {
-            // Fallback if no device ID is selected (e.g., initial load on mobile)
-             try {
-                const stream = await navigator.mediaDevices.getUserMedia({ 
-                    video: { 
-                        facingMode: { ideal: "environment" }, // Prefer back camera
-                        width: { ideal: 1280 }, 
-                        height: { ideal: 720 } 
-                    } 
-                });
-                if (videoRef.current) {
-                    videoRef.current.srcObject = stream;
-                    videoRef.current.play();
-                    setIsScanning(true);
-                    setStatus('Camera active');
-                }
-                return;
-            } catch (err) {
-                 console.error("Error accessing webcam:", err);
-                 showMessage("Could not access webcam. Please grant permissions.", 'error');
-                 return;
-            }
+    // 2. Initialize Camera Logic
+    const startCamera = useCallback(async (deviceId = null) => {
+        if (streamRef.current) {
+            streamRef.current.getTracks().forEach(track => track.stop());
         }
 
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({ 
-                video: { 
-                    deviceId: { exact: selectedDeviceId },
-                    width: { ideal: 1280 }, 
-                    height: { ideal: 720 } 
-                } 
-            });
+            const constraints = {
+                video: {
+                    deviceId: deviceId ? { exact: deviceId } : undefined,
+                    facingMode: deviceId ? undefined : 'environment', // Prefer back camera on mobile
+                    width: { ideal: 1280 },
+                    height: { ideal: 720 }
+                }
+            };
+
+            const stream = await navigator.mediaDevices.getUserMedia(constraints);
+            streamRef.current = stream;
+            
             if (videoRef.current) {
                 videoRef.current.srcObject = stream;
-                videoRef.current.play(); // Explicitly play the video stream
-                setIsScanning(true);
-                setStatus('Camera active');
+                videoRef.current.onloadedmetadata = () => {
+                    videoRef.current.play();
+                    setIsScanning(true);
+                    setStatus('Align text in the box');
+                };
             }
+
+            // Get list of cameras for the switcher
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            setCameras(devices.filter(d => d.kind === 'videoinput'));
+
         } catch (err) {
-            console.error("Error accessing webcam:", err);
-            showMessage("Could not access webcam. Please grant permissions.", 'error');
+            console.error("Camera Error:", err);
+            showMessage("Camera access denied. Please check permissions.", "error");
         }
-    }, [showMessage, selectedDeviceId]);
+    }, [showMessage]);
 
-    const stopScan = useCallback(() => {
-        if (videoRef.current && videoRef.current.srcObject) {
-            videoRef.current.srcObject.getTracks().forEach(track => track.stop());
-            videoRef.current.srcObject = null;
-        }
-        setIsScanning(false);
-        setStatus('Ready to Scan');
-    }, []);
-
-    const validateReads = useCallback(() => {
-        if (recentReads.current.length > REQUIRED_CONSECUTIVE_MATCHES) {
-            recentReads.current.shift();
-        }
-        if (recentReads.current.length === REQUIRED_CONSECUTIVE_MATCHES && new Set(recentReads.current).size === 1) {
-            const confidentRead = recentReads.current[0];
-            setIsProcessing(true);
-            setStatus(`Validated: ${confidentRead}! Fetching data...`);
-            onCardScanned(confidentRead);
-            lastScanTime.current = Date.now() / 1000;
-            recentReads.current = [];
-            setIsProcessing(false);
-        }
-    }, [onCardScanned]);
-
-    // Continuously scan when camera is active
     useEffect(() => {
-        let intervalId;
-        if (isScanning && !isProcessing && fuse) {
-            intervalId = setInterval(async () => {
-                const isOnCooldown = (Date.now() / 1000 - lastScanTime.current) < SCAN_COOLDOWN;
-                if (isOnCooldown) {
-                    const cooldownTimeLeft = SCAN_COOLDOWN - (Date.now() / 1000 - lastScanTime.current);
-                    setStatus(`Success! Cooldown: ${Math.ceil(cooldownTimeLeft)}s`);
-                    return;
-                }
-                
-                if (videoRef.current && videoRef.current.readyState >= 3 && canvasRef.current) { // Check if video has enough data
-                    setStatus('Scanning...');
+        if (allCardNames.length > 0 && !isScanning) {
+            startCamera();
+        }
+        return () => {
+            if (streamRef.current) {
+                streamRef.current.getTracks().forEach(track => track.stop());
+            }
+        };
+    }, [allCardNames, startCamera]); // eslint-disable-line
+
+    // 3. Scanning Loop
+    useEffect(() => {
+        let interval;
+        if (isScanning && fuse) {
+            interval = setInterval(async () => {
+                const now = Date.now() / 1000;
+                if (now - lastScanTime.current < SCAN_COOLDOWN) return;
+
+                if (videoRef.current && canvasRef.current) {
                     const video = videoRef.current;
                     const canvas = canvasRef.current;
-                    const context = canvas.getContext('2d');
-                    
-                    const roi = { x: video.videoWidth * 0.2, y: video.videoHeight * 0.05, width: video.videoWidth * 0.6, height: video.videoHeight * 0.1 };
-                    
-                    canvas.width = roi.width;
-                    canvas.height = roi.height;
-                    
-                    context.drawImage(video, roi.x, roi.y, roi.width, roi.height, 0, 0, roi.width, roi.height);
+                    const ctx = canvas.getContext('2d');
 
-                    const imageDataUrl = canvas.toDataURL('image/jpeg');
+                    // Define Region of Interest (The green box area)
+                    // We scan only the center 60% width and 15% height to focus on the Title
+                    const roiX = video.videoWidth * 0.2;
+                    const roiY = video.videoHeight * 0.08; // Higher up for card title
+                    const roiW = video.videoWidth * 0.6;
+                    const roiH = video.videoHeight * 0.15;
 
-                    try {
-                        const { data: { text } } = await Tesseract.recognize(imageDataUrl, 'eng');
-                        const cleanedText = text.trim().replace(/[^a-zA-Z\s,']/g, "");
-                        
-                        if (cleanedText.length > 2) {
-                            const results = fuse.search(cleanedText);
-                            if (results.length > 0) {
-                                const bestMatch = results[0];
-                                if (bestMatch.score < (1 - MATCH_CONFIDENCE_THRESHOLD)) {
-                                    setStatus(`Found: ${bestMatch.item} (Confidence: ${Math.round((1 - bestMatch.score) * 100)}%)`);
-                                    recentReads.current.push(bestMatch.item);
-                                    validateReads();
+                    canvas.width = roiW;
+                    canvas.height = roiH;
+                    ctx.drawImage(video, roiX, roiY, roiW, roiH, 0, 0, roiW, roiH);
+
+                    const { data: { text } } = await Tesseract.recognize(canvas, 'eng');
+                    const cleaned = text.replace(/[^a-zA-Z\s]/g, '').trim();
+
+                    if (cleaned.length > 3) {
+                        const results = fuse.search(cleaned);
+                        if (results.length > 0 && results[0].score < 0.15) { // Very strict match
+                            const match = results[0].item;
+                            recentReads.current.push(match);
+                            
+                            // Check for consecutive matches
+                            if (recentReads.current.length >= REQUIRED_CONSECUTIVE_MATCHES) {
+                                const allSame = recentReads.current.every(val => val === match);
+                                if (allSame) {
+                                    handleScanSuccess(match);
                                 }
+                                recentReads.current.shift(); // Keep buffer small
                             }
                         }
-                    } catch (error) {
-                        console.warn("OCR failed for this frame:", error);
                     }
                 }
-            }, 500);
+            }, 600); // Scan interval
         }
-        return () => clearInterval(intervalId);
-    }, [isScanning, isProcessing, fuse, validateReads]);
+        return () => clearInterval(interval);
+    }, [isScanning, fuse]);
+
+    const handleScanSuccess = (cardName) => {
+        setScannedCard(cardName);
+        setStatus(`Found: ${cardName}`);
+        lastScanTime.current = Date.now() / 1000;
+        onCardScanned(cardName);
+        // Optional: Add a flash effect or sound here
+    };
+
+    const switchCamera = () => {
+        if (cameras.length > 1) {
+            const currentIndex = cameras.findIndex(c => c.deviceId === activeCameraId);
+            const nextIndex = (currentIndex + 1) % cameras.length;
+            const nextId = cameras[nextIndex].deviceId;
+            setActiveCameraId(nextId);
+            startCamera(nextId);
+        }
+    };
 
     return (
-        <div className="p-4 bg-gray-900/50 rounded-2xl border border-gray-700 flex flex-col items-center">
-            {allCardNames.length === 0 ? <Spinner text="Loading card catalog..." /> :
-            isScanning ? (
-                <div className="flex flex-col items-center w-full">
-                    <div className="relative w-full max-w-2xl rounded-lg overflow-hidden border-2 border-purple-500/50">
-                        <video ref={videoRef} autoPlay playsInline className="w-full h-auto"></video>
-                        <div className="absolute border-2 border-green-400 pointer-events-none" style={{ top: '5%', left: '20%', width: '60%', height: '10%' }}></div>
+        <div className="flex flex-col items-center w-full h-full bg-black rounded-xl overflow-hidden relative">
+            {/* Camera View */}
+            <div className="relative w-full aspect-video bg-gray-900">
+                <video 
+                    ref={videoRef} 
+                    className="w-full h-full object-cover" 
+                    playsInline 
+                    muted 
+                />
+                
+                {/* Overlay UI */}
+                <div className="absolute inset-0 pointer-events-none flex flex-col items-center">
+                    {/* Top Status Bar */}
+                    <div className="w-full p-2 bg-black/50 text-white text-center text-sm font-mono backdrop-blur-sm">
+                        {status}
                     </div>
-                    <p className="mt-4 text-lg font-semibold text-yellow-300">{status}</p>
-                    <p className="text-sm text-gray-400">Align card title in the green box.</p>
-                    <button onClick={stopScan} className="mt-4 flex items-center gap-2 px-6 py-3 bg-red-600 text-white font-bold rounded-lg hover:bg-red-500"><X size={20} /> Stop Scanner</button>
+
+                    {/* Guidelines - The Green Box */}
+                    <div className="mt-8 w-[80%] h-[15%] border-2 border-green-400 rounded-lg shadow-[0_0_20px_rgba(74,222,128,0.5)] relative">
+                        <div className="absolute -top-5 left-1/2 -translate-x-1/2 text-green-400 text-xs font-bold bg-black/70 px-2 rounded">
+                            CARD TITLE HERE
+                        </div>
+                    </div>
+
+                    {/* Instructions */}
+                    <div className="mt-auto mb-4 bg-black/60 px-4 py-2 rounded-full text-white/80 text-xs">
+                        Hold steady. Good lighting is key.
+                    </div>
                 </div>
-            ) : (
-                <div className="text-center space-y-4">
-                     <div>
-                        <label htmlFor="camera-select" className="block text-sm font-medium text-gray-300 mb-1">Select Camera</label>
-                        <select 
-                            id="camera-select"
-                            value={selectedDeviceId}
-                            onChange={(e) => setSelectedDeviceId(e.target.value)}
-                            className="w-full p-2 bg-gray-700 border border-gray-600 rounded-lg text-white"
-                        >
-                            {videoDevices.map(device => (
-                                <option key={device.deviceId} value={device.deviceId}>{device.label || `Camera ${videoDevices.indexOf(device) + 1}`}</option>
-                            ))}
-                        </select>
-                    </div>
-                    <button onClick={startScan} className="flex items-center justify-center gap-2 px-6 py-3 bg-purple-600 text-white font-bold rounded-lg hover:bg-purple-500 transform hover:scale-105 shadow-lg">
-                        <ScanLine size={20} /> Start MTG Scanner
+            </div>
+
+            {/* Controls */}
+            <div className="flex gap-4 mt-4 mb-2">
+                {cameras.length > 1 && (
+                    <button onClick={switchCamera} className="p-3 bg-gray-700 rounded-full text-white hover:bg-gray-600 transition-colors">
+                        <RefreshCw size={24} />
                     </button>
-                    <p className="text-sm text-gray-400">The scanner will validate a card after 3 consecutive high-confidence reads.</p>
-                </div>
-            )}
-            <canvas ref={canvasRef} className="hidden"></canvas>
+                )}
+            </div>
+
+            {/* Hidden Canvas for Processing */}
+            <canvas ref={canvasRef} className="hidden" />
         </div>
     );
 };
