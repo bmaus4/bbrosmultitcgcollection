@@ -1,5 +1,3 @@
-import { format } from 'd3-format';
-
 const TCG_APIS = {
     mtg: 'https://api.scryfall.com/cards/search?q=',
     pokemon: 'https://api.pokemontcg.io/v2/cards?q=name:',
@@ -164,7 +162,8 @@ export const generateDeckWithGemini = async (collection, format, commander) => {
 
     const availableCardsList = collection.map(c => `${c.quantity} x ${c.name}`).join('\n');
 
-    let prompt = `You are an expert Magic: The Gathering deck builder. Build the strongest possible deck using ONLY the cards from the "Available Cards" list.
+    let prompt = `You are an expert Magic: The Gathering deck builder simulating the EDHREC "Recs" engine. 
+    Your goal is to build the most synergetic and powerful deck possible using ONLY the cards found in the "Available Cards" list below.
 
     Available Cards:
     ${availableCardsList}
@@ -177,18 +176,29 @@ export const generateDeckWithGemini = async (collection, format, commander) => {
         prompt += `
         Commander: ${commander.name}
         Color Identity: ${commander.color_identity.join(', ')}
-        Follow all Commander deck-building rules: 100 cards exactly, singleton format (except basic lands), and all cards must match the commander's color identity.
+        
+        **Deck Building Instructions:**
+        1. **EDHREC Simulation**: Prioritize cards that have high synergy scores on EDHREC for ${commander.name}.
+        2. **Rules**: Deck must be exactly 100 cards (including commander). Singleton format (except basic lands). Adhere strictly to color identity.
+        3. **Structure**: Ensure a healthy balance of Lands (approx 33-38), Ramp, Draw, and Interaction.
+        4. **Optimization**: Try to build the deck to at least "Upgraded" or "Optimized" bracket levels if the card pool allows.
         `;
     } else { // Standard
         prompt += `
         Deck Building Rules for Standard:
         1. The deck must contain at least 60 cards.
         2. With the exception of basic lands, a maximum of 4 copies of any card are allowed.
+        3. Focus on meta-relevant strategies if cards allow.
         `;
     }
 
     prompt += `
-    Please return ONLY the decklist in the format "Quantity x Card Name", with each card on a new line. Do not include any other text.
+    **Output Format:**
+    Return ONLY the decklist in the format "Quantity x Card Name", with each card on a new line. Do not include any other text, intros, or outros.
+    Example:
+    1 x Sol Ring
+    1 x Arcane Signet
+    ...
     `;
     
     const chatHistory = [{ role: "user", parts: [{ text: prompt }] }];
