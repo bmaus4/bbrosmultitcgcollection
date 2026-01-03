@@ -2,15 +2,15 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, doc, setDoc, getDoc } from 'firebase/firestore';
-import { BookOpen, Star, Sparkles, Save, AlertTriangle, BarChart2, Gavel } from 'lucide-react'; // Added Gavel icon
+import { BookOpen, Star, Sparkles, Save, AlertTriangle, BarChart2, ScanLine } from 'lucide-react';
 
-import { searchCard } from './services/api';
 import { Spinner } from './components/Shared';
 import CollectionManager from './features/collection/CollectionManager';
 import DeckBuilder from './features/decks/DeckBuilder';
 import DeckAnalysis from './features/analysis/DeckAnalysis';
-import RulesGuru from './features/rules/RulesGuru'; // Import new component
+import RulesGuru from './features/rules/RulesGuru';
 import Auth from './auth/Auth';
+import CardScanner from './features/scanner/CardScanner';
 
 const TCG_CONFIG = {
     mtg: { 
@@ -24,7 +24,8 @@ const TCG_CONFIG = {
         deckFormats: ['standard', 'commander'],
         placeholder: 'e.g., Sol Ring, Lightning Bolt...',
         hasDecks: true,
-        hasRules: true, // Enable rules for MTG
+        hasRules: true,
+        hasScanner: true,
     },
     pokemon: { 
         name: 'Pokémon', 
@@ -38,6 +39,7 @@ const TCG_CONFIG = {
         placeholder: 'e.g., Charizard, Pikachu...',
         hasDecks: false,
         hasRules: false,
+        hasScanner: false,
     },
     yugioh: { 
         name: 'Yu-Gi-Oh!', 
@@ -51,6 +53,7 @@ const TCG_CONFIG = {
         placeholder: 'e.g., Blue-Eyes White Dragon...',
         hasDecks: true,
         hasRules: false,
+        hasScanner: false,
     },
 };
 
@@ -90,10 +93,14 @@ function App() {
     }, []);
     
     useEffect(() => {
-        if (!TCG_CONFIG[activeTCG].hasDecks && (view === 'decks' || view === 'analysis')) {
+        const currentConfig = TCG_CONFIG[activeTCG];
+        if (!currentConfig.hasDecks && (view === 'decks' || view === 'analysis')) {
             setView('collection');
         }
-        if (!TCG_CONFIG[activeTCG].hasRules && view === 'rules') {
+        if (!currentConfig.hasRules && view === 'rules') {
+            setView('collection');
+        }
+        if (!currentConfig.hasScanner && view === 'scanner') {
             setView('collection');
         }
     }, [activeTCG, view]);
@@ -197,12 +204,11 @@ function App() {
     }, [activeTCG]);
     
     const currentTCGData = data[activeTCG] || { collection: [], decks: [] };
+    const currentDecks = currentTCGData.decks || [];
+    
     const activeDeck = useMemo(() => {
-        if (currentTCGData && Array.isArray(currentTCGData.decks)) {
-            return currentTCGData.decks.find(d => d.id === activeDeckId);
-        }
-        return null;
-    }, [currentTCGData, activeDeckId]);
+        return currentDecks.find(d => d.id === activeDeckId);
+    }, [currentDecks, activeDeckId]);
 
     const activeTheme = TCG_CONFIG[activeTCG].theme;
 
@@ -220,9 +226,11 @@ function App() {
                             showMessage={showMessage} 
                         /> : null;
             case 'analysis':
-                return TCG_CONFIG[activeTCG].hasDecks && activeDeck ? <DeckAnalysis deck={activeDeck} /> : <div className="text-center py-20 bg-gray-800/30 rounded-2xl"><p className="text-gray-400">Please select a deck to see its analysis.</p></div>;
+                return TCG_CONFIG[activeTCG].hasDecks && activeDeck ? <DeckAnalysis deck={activeDeck} /> : <div className="text-center py-20 bg-gray-800/30 rounded-2xl"><p className="text-gray-400">Please select a deck to see its analysis.</p></div>
             case 'rules':
-                return <RulesGuru showMessage={showMessage} />;
+                return TCG_CONFIG[activeTCG].hasRules ? <RulesGuru showMessage={showMessage} /> : null;
+            case 'scanner':
+                 return TCG_CONFIG[activeTCG].hasScanner ? <CardScanner onCardScanned={addCardToCollection} showMessage={showMessage} /> : null;
             default:
                 return <CollectionManager 
                             tcg={activeTCG}
@@ -264,7 +272,7 @@ function App() {
                             </button>
                         ))}
                     </div>
-                     <nav className="flex items-center justify-center gap-2 p-2 bg-gray-800/60 rounded-full border border-gray-700 backdrop-blur-sm">
+                     <nav className="flex items-center justify-center gap-2 p-2 bg-gray-800/60 rounded-full border border-gray-700 backdrop-blur-sm flex-wrap">
                         <button onClick={() => setView('collection')} className={`px-4 py-2 rounded-full text-sm font-semibold transition-colors ${view === 'collection' ? 'bg-indigo-600 text-white' : 'text-gray-300 hover:bg-gray-700'}`}><Star className="inline-block mr-2" size={16} />Collection</button>
                         {TCG_CONFIG[activeTCG].hasDecks && (
                             <>
@@ -273,7 +281,10 @@ function App() {
                             </>
                         )}
                         {TCG_CONFIG[activeTCG].hasRules && (
-                            <button onClick={() => setView('rules')} className={`px-4 py-2 rounded-full text-sm font-semibold transition-colors ${view === 'rules' ? 'bg-indigo-600 text-white' : 'text-gray-300 hover:bg-gray-700'}`}><Gavel className="inline-block mr-2" size={16} />Rules Guru</button>
+                            <button onClick={() => setView('rules')} className={`px-4 py-2 rounded-full text-sm font-semibold transition-colors ${view === 'rules' ? 'bg-indigo-600 text-white' : 'text-gray-300 hover:bg-gray-700'}`}><img src="https://img.icons8.com/ios-filled/50/ffffff/gavel.png" alt="Gavel" className="inline-block mr-2 w-4 h-4" />Rules Guru</button>
+                        )}
+                        {TCG_CONFIG[activeTCG].hasScanner && (
+                            <button onClick={() => setView('scanner')} className={`px-4 py-2 rounded-full text-sm font-semibold transition-colors ${view === 'scanner' ? 'bg-indigo-600 text-white' : 'text-gray-300 hover:bg-gray-700'}`}><ScanLine className="inline-block mr-2" size={16} />Scanner</button>
                         )}
                     </nav>
                 </header>
