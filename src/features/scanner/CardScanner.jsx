@@ -1,11 +1,10 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { X, ScanLine, Camera, RefreshCw } from 'lucide-react';
+import { RefreshCw } from 'lucide-react';
 import Tesseract from 'tesseract.js';
 import Fuse from 'fuse.js';
-import { Spinner } from '../../components/Shared.jsx';
 
-const REQUIRED_CONSECUTIVE_MATCHES = 2; // Lowered slightly for faster mobile feel
-const MATCH_CONFIDENCE_THRESHOLD = 0.85; 
+const REQUIRED_CONSECUTIVE_MATCHES = 2;
+const MATCH_THRESHOLD = 0.15; // Fuse score: 0 is perfect match.
 const SCAN_COOLDOWN = 3; 
 
 const CardScanner = ({ onCardScanned, showMessage }) => {
@@ -15,7 +14,6 @@ const CardScanner = ({ onCardScanned, showMessage }) => {
     const [fuse, setFuse] = useState(null);
     const [cameras, setCameras] = useState([]);
     const [activeCameraId, setActiveCameraId] = useState(null);
-    const [scannedCard, setScannedCard] = useState(null);
     
     const recentReads = useRef([]);
     const lastScanTime = useRef(0);
@@ -61,7 +59,7 @@ const CardScanner = ({ onCardScanned, showMessage }) => {
             if (videoRef.current) {
                 videoRef.current.srcObject = stream;
                 videoRef.current.onloadedmetadata = () => {
-                    videoRef.current.play();
+                    videoRef.current.play().catch(e => console.error("Play error:", e));
                     setIsScanning(true);
                     setStatus('Align text in the box');
                 };
@@ -77,6 +75,7 @@ const CardScanner = ({ onCardScanned, showMessage }) => {
         }
     }, [showMessage]);
 
+    // Handle initial camera start
     useEffect(() => {
         if (allCardNames.length > 0 && !isScanning) {
             startCamera();
@@ -86,7 +85,15 @@ const CardScanner = ({ onCardScanned, showMessage }) => {
                 streamRef.current.getTracks().forEach(track => track.stop());
             }
         };
-    }, [allCardNames, startCamera]); // eslint-disable-line
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [allCardNames]); 
+
+    // Success Handler (Wrapped in useCallback to fix lint error)
+    const handleScanSuccess = useCallback((cardName) => {
+        setStatus(`Found: ${cardName}`);
+        lastScanTime.current = Date.now() / 1000;
+        onCardScanned(cardName);
+    }, [onCardScanned]);
 
     // 3. Scanning Loop
     useEffect(() => {
@@ -101,10 +108,11 @@ const CardScanner = ({ onCardScanned, showMessage }) => {
                     const canvas = canvasRef.current;
                     const ctx = canvas.getContext('2d');
 
+                    if (video.videoWidth === 0 || video.videoHeight === 0) return;
+
                     // Define Region of Interest (The green box area)
-                    // We scan only the center 60% width and 15% height to focus on the Title
                     const roiX = video.videoWidth * 0.2;
-                    const roiY = video.videoHeight * 0.08; // Higher up for card title
+                    const roiY = video.videoHeight * 0.08; 
                     const roiW = video.videoWidth * 0.6;
                     const roiH = video.videoHeight * 0.15;
 
@@ -117,7 +125,8 @@ const CardScanner = ({ onCardScanned, showMessage }) => {
 
                     if (cleaned.length > 3) {
                         const results = fuse.search(cleaned);
-                        if (results.length > 0 && results[0].score < 0.15) { // Very strict match
+                        // Using the constant MATCH_THRESHOLD now
+                        if (results.length > 0 && results[0].score < MATCH_THRESHOLD) { 
                             const match = results[0].item;
                             recentReads.current.push(match);
                             
@@ -135,15 +144,7 @@ const CardScanner = ({ onCardScanned, showMessage }) => {
             }, 600); // Scan interval
         }
         return () => clearInterval(interval);
-    }, [isScanning, fuse]);
-
-    const handleScanSuccess = (cardName) => {
-        setScannedCard(cardName);
-        setStatus(`Found: ${cardName}`);
-        lastScanTime.current = Date.now() / 1000;
-        onCardScanned(cardName);
-        // Optional: Add a flash effect or sound here
-    };
+    }, [isScanning, fuse, handleScanSuccess]); // handleScanSuccess is now a dependency
 
     const switchCamera = () => {
         if (cameras.length > 1) {
