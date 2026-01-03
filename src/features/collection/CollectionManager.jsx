@@ -185,24 +185,6 @@ const CollectionManager = ({ tcg, config, collection, onDeleteCard, onAddCard, s
         setIsSearching(false);
         setManualCardName('');
     };
-    
-    const triggerPythonScanner = async () => {
-        showMessage('Python scanner window opening...', 'info');
-        try {
-            const response = await fetch('http://localhost:5000/scan');
-            const result = await response.json();
-
-            if (result.card_name) {
-                // Use the card name from Python to search and add to the collection
-                await handleSearch(result.card_name);
-            } else {
-                showMessage('No card was scanned.', 'error');
-            }
-        } catch (error) {
-            console.error("Failed to connect to Python scanner:", error);
-            showMessage('Could not connect to the Python scanner. Is it running?', 'error');
-        }
-    };
 
     const handleVersionSelect = (card) => {
         setSearchResults([]);
@@ -315,7 +297,7 @@ const CollectionManager = ({ tcg, config, collection, onDeleteCard, onAddCard, s
             {pokemonCardToCondition && <PokemonConditionModal card={pokemonCardToCondition} onClose={() => setPokemonCardToCondition(null)} onAdd={(card) => { onAddCard(card); setPokemonCardToCondition(null); }} />}
             {selectedCard && <CardDetailModal tcg={tcg} card={selectedCard} onClose={() => setSelectedCard(null)} />}
             
-            {/* Added Modal for Scanner */}
+            {/* Modal for Web Scanner */}
             <Modal isOpen={isScannerOpen} onClose={() => setIsScannerOpen(false)} title="MTG Card Scanner">
                 <CardScanner 
                     showMessage={showMessage}

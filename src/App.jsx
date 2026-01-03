@@ -203,12 +203,15 @@ function App() {
         });
     }, [activeTCG]);
     
-    const currentTCGData = data[activeTCG] || { collection: [], decks: [] };
-    const currentDecks = currentTCGData.decks || [];
+    // FIX: Memoize currentTCGData to fix linter error and stabilize dependencies
+    const currentTCGData = useMemo(() => {
+        return data[activeTCG] || { collection: [], decks: [] };
+    }, [data, activeTCG]);
     
+    // FIX: activeDeck now depends on the stable currentTCGData
     const activeDeck = useMemo(() => {
-        return currentDecks.find(d => d.id === activeDeckId);
-    }, [currentDecks, activeDeckId]);
+        return currentTCGData.decks?.find(d => d.id === activeDeckId) || null;
+    }, [currentTCGData, activeDeckId]);
 
     const activeTheme = TCG_CONFIG[activeTCG].theme;
 
@@ -281,7 +284,7 @@ function App() {
                             </>
                         )}
                         {TCG_CONFIG[activeTCG].hasRules && (
-                            <button onClick={() => setView('rules')} className={`px-4 py-2 rounded-full text-sm font-semibold transition-colors ${view === 'rules' ? 'bg-indigo-600 text-white' : 'text-gray-300 hover:bg-gray-700'}`}><img src="https://img.icons8.com/ios-filled/50/ffffff/gavel.png" alt="Gavel" className="inline-block mr-2 w-4 h-4" />Rules Guru</button>
+                            <button onClick={() => setView('rules')} className={`px-4 py-2 rounded-full text-sm font-semibold transition-colors ${view === 'rules' ? 'bg-indigo-600 text-white' : 'text-gray-300 hover:bg-gray-700'}`}><img src="https://img.icons8.com/ios-filled/50/ffffff/gavel.png" alt="" className="inline-block mr-2 w-4 h-4" />Rules Guru</button>
                         )}
                         {TCG_CONFIG[activeTCG].hasScanner && (
                             <button onClick={() => setView('scanner')} className={`px-4 py-2 rounded-full text-sm font-semibold transition-colors ${view === 'scanner' ? 'bg-indigo-600 text-white' : 'text-gray-300 hover:bg-gray-700'}`}><ScanLine className="inline-block mr-2" size={16} />Scanner</button>

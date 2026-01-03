@@ -51,7 +51,13 @@ const CardScanner = ({ onCardScanned, showMessage }) => {
                 const videoInputs = devices.filter(device => device.kind === 'videoinput');
                 setVideoDevices(videoInputs);
                 if (videoInputs.length > 0) {
-                    setSelectedDeviceId(videoInputs[0].deviceId);
+                    // Try to find a back camera first
+                    const backCamera = videoInputs.find(d => d.label.toLowerCase().includes('back') || d.label.toLowerCase().includes('environment'));
+                    if (backCamera) {
+                        setSelectedDeviceId(backCamera.deviceId);
+                    } else {
+                        setSelectedDeviceId(videoInputs[0].deviceId);
+                    }
                 }
             } catch (error) {
                 console.error("Could not enumerate devices:", error);
@@ -62,9 +68,29 @@ const CardScanner = ({ onCardScanned, showMessage }) => {
 
     const startScan = useCallback(async () => {
         if (!selectedDeviceId) {
-            showMessage("No camera selected or available.", "error");
-            return;
+            // Fallback if no device ID is selected (e.g., initial load on mobile)
+             try {
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { 
+                        facingMode: { ideal: "environment" }, // Prefer back camera
+                        width: { ideal: 1280 }, 
+                        height: { ideal: 720 } 
+                    } 
+                });
+                if (videoRef.current) {
+                    videoRef.current.srcObject = stream;
+                    videoRef.current.play();
+                    setIsScanning(true);
+                    setStatus('Camera active');
+                }
+                return;
+            } catch (err) {
+                 console.error("Error accessing webcam:", err);
+                 showMessage("Could not access webcam. Please grant permissions.", 'error');
+                 return;
+            }
         }
+
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ 
                 video: { 
