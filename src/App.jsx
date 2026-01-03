@@ -250,7 +250,7 @@ function App() {
                     <div className="flex flex-col md:flex-row justify-between items-center gap-4">
                         <div className="flex items-center gap-3">
                             <Sparkles className="text-indigo-400" size={32} />
-                            <h1 className="text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-purple-500">Multi-TCG Companion</h1>
+                            <h1 className="text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-purple-500">Multi-TCG Collection</h1>
                         </div>
                         <div className="flex items-center gap-4">
                             <button onClick={saveData} className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-500 transition-colors"><Save size={18} /> Save</button>
