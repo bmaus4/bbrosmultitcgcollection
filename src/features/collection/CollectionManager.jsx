@@ -48,7 +48,7 @@ const CardDisplay = ({ card, onDelete, onAdd, onCardClick, tcg }) => {
         priceDisplay = card.type_line;
     }
 
-    const addPressProps = useLongPress(() => onAdd(card));
+    const addPressProps = useLongPress(() => onAdd && onAdd(card));
 
     return (
     <div className="bg-gray-800/50 rounded-lg overflow-hidden shadow-lg border border-gray-700 hover:border-indigo-500 transition-all duration-300 transform hover:-translate-y-1 group relative backdrop-blur-sm">
@@ -56,7 +56,7 @@ const CardDisplay = ({ card, onDelete, onAdd, onCardClick, tcg }) => {
             src={card.image_uris?.normal || `https://placehold.co/600x838/1f2937/7c3aed?text=${encodeURIComponent(card.name)}`}
             alt={card.name}
             className="w-full h-auto transition-transform duration-300 group-hover:scale-105 cursor-pointer"
-            onClick={() => onCardClick(card)}
+            onClick={() => onCardClick && onCardClick(card)}
             onError={(e) => { e.target.onerror = null; e.target.src = `https://placehold.co/600x838/1f2937/7c3aed?text=No+Image`; }}
         />
         <div className="absolute top-1 right-1 bg-indigo-600 text-white text-xs font-bold px-2 py-1 rounded-full shadow-lg">
@@ -262,7 +262,7 @@ const CollectionManager = ({ tcg, config, collection, onDeleteCard, onAddCard, s
                             className="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                         />
                         {tcg === 'mtg' && (
-                            <button type="button" onClick={triggerPythonScanner} className="flex items-center justify-center gap-2 px-6 py-3 bg-gray-600 text-white font-bold rounded-lg hover:bg-gray-500 transition-colors">
+                            <button type="button" onClick={() => setIsScannerOpen(true)} className="flex items-center justify-center gap-2 px-6 py-3 bg-gray-600 text-white font-bold rounded-lg hover:bg-gray-500 transition-colors">
                                 <ScanLine size={20} /> Scan
                             </button>
                         )}
@@ -314,6 +314,17 @@ const CollectionManager = ({ tcg, config, collection, onDeleteCard, onAddCard, s
             {searchResults.length > 0 && <VersionSelectModal searchResults={searchResults} onClose={() => setSearchResults([])} onSelectCard={handleVersionSelect} tcg={tcg} />}
             {pokemonCardToCondition && <PokemonConditionModal card={pokemonCardToCondition} onClose={() => setPokemonCardToCondition(null)} onAdd={(card) => { onAddCard(card); setPokemonCardToCondition(null); }} />}
             {selectedCard && <CardDetailModal tcg={tcg} card={selectedCard} onClose={() => setSelectedCard(null)} />}
+            
+            {/* Added Modal for Scanner */}
+            <Modal isOpen={isScannerOpen} onClose={() => setIsScannerOpen(false)} title="MTG Card Scanner">
+                <CardScanner 
+                    showMessage={showMessage}
+                    onCardScanned={async (cardName) => {
+                        await handleSearch(cardName);
+                        setIsScannerOpen(false);
+                    }}
+                />
+            </Modal>
         </div>
     );
 };
