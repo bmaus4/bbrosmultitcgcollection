@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="icon" href="%PUBLIC_URL%/favicon.ico" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#000000" />
+    <meta
+      name="description"
+      content="A digital companion for your Magic: The Gathering card collection."
+    />
+    <link rel="apple-touch-icon" href="%PUBLIC_URL%/logo192.png" />
+    <link rel="manifest" href="%PUBLIC_URL%/manifest.json" />
+    
+    <!-- Google Fonts: Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+
+    <title>MTG Digital Companion</title>
+
+    <script>
+      // IMPORTANT: Replace the empty object {} with your actual Firebase config object.
+      // This object is provided by Firebase when you create a web app in their console.
+      // It's crucial for connecting to Firebase services for data storage and authentication.
+      window.__firebase_config = JSON.stringify({
+        apiKey: "AIzaSyCm29zPpWkhVidodE6nC0tHp1soJ8NR-K0",
+        authDomain: "mtg-cardsorter.firebaseapp.com",
+        projectId: "mtg-cardsorter",
+        storageBucket: "mtg-cardsorter.firebasestorage.app",
+        messagingSenderId: "122704071717",
+        appId: "1:122704071717:web:1ae29357b409c0fba343cc"
+      });
+
+      // This is a unique identifier for this application instance within the Firebase project.
+      // You can leave this as is.
+      window.__app_id = 'mtg-collection-manager';
+    </script>
+    
+  </head>
+  <body class="bg-gray-900">
+    <noscript>You need to enable JavaScript to run this app.</noscript>
+    <div id="root"></div>
+  </body>
+</html>

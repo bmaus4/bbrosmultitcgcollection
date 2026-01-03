@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Standalone MTG Web Scanner</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src='https://unpkg.com/tesseract.js@5.0.0/dist/tesseract.min.js'></script>
+    <script src="https://cdn.jsdelivr.net/npm/fuse.js@6.6.2"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+    </style>
+</head>
+<body class="bg-gray-900 text-white flex flex-col items-center justify-center min-h-screen p-4">
+
+    <div id="setup" class="text-center space-y-4">
+        <h1 class="text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-indigo-500">MTG Web Scanner</h1>
+        <div id="loading-status" class="flex items-center justify-center gap-2 text-yellow-400">
+            <svg class="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+            <span>Loading card catalog...</span>
+        </div>
+        <div id="camera-setup" class="hidden">
+            <label for="camera-select" class="block text-sm font-medium text-gray-300 mb-1">Select Camera</label>
+            <select id="camera-select" class="w-full max-w-xs p-2 bg-gray-700 border border-gray-600 rounded-lg text-white"></select>
+            <button id="start-btn" class="mt-4 px-6 py-3 bg-purple-600 font-semibold rounded-lg hover:bg-purple-500 transition-colors">Start Scanner</button>
+        </div>
+    </div>
+
+    <div id="scanner-ui" class="hidden w-full max-w-4xl">
+        <div class="relative bg-black rounded-lg shadow-lg">
+            <video id="video-feed" class="w-full h-auto rounded-lg" playsinline></video>
+            <div id="roi-box" class="absolute border-2 border-green-400 pointer-events-none"></div>
+            <div id="info-panel" class="absolute top-0 left-0 h-full w-1/3 bg-black bg-opacity-60 p-4 backdrop-blur-sm overflow-y-auto hidden">
+                <!-- Card info will be injected here -->
+            </div>
+        </div>
+        <div id="status-display" class="text-center mt-4 font-semibold text-yellow-300"></div>
+        <button id="stop-btn" class="mt-4 w-full px-6 py-3 bg-red-600 font-semibold rounded-lg hover:bg-red-500 transition-colors">Stop Scanner</button>
+    </div>
+
+    <!-- Hidden canvas for OCR processing -->
+    <canvas id="ocr-canvas" class="hidden"></canvas>
+
+    <script>
+        // --- DOM Elements ---
+        const setupDiv = document.getElementById('setup');
+        const scannerUiDiv = document.getElementById('scanner-ui');
+        const startBtn = document.getElementById('start-btn');
+        const stopBtn = document.getElementById('stop-btn');
+        const cameraSelect = document.getElementById('camera-select');
+        const videoFeed = document.getElementById('video-feed');
+        const roiBox = document.getElementById('roi-box');
+        const infoPanel = document.getElementById('info-panel');
+        const statusDisplay = document.getElementById('status-display');
+        const ocrCanvas = document.getElementById('ocr-canvas');
+        const loadingStatus = document.getElementById('loading-status');
+        const cameraSetup = document.getElementById('camera-setup');
+
+        // --- State Management ---
+        let appState = {
+            cardNames: [],
+            fuse: null,
+            stream: null,
+            isScanning: false,
+            lastScanTime: 0,
+            lastCardData: null,
+            recentReads: [],
+        };
+
+        // --- Constants ---
+        const REQUIRED_CONSECUTIVE_MATCHES = 3;
+        const MATCH_CONFIDENCE_THRESHOLD = 0.85; // Lower is better for Fuse.js
+        const SCAN_COOLDOWN = 5; // seconds
+        const ROI_CONFIG = { x: 0.25, y: 0.06, width: 0.5, height: 0.08 };
+
+        // --- Core Logic ---
+
+        async function initialize() {
+            // 1. Fetch all card names for fuzzy matching
+            try {
+                const response = await fetch("https://api.scryfall.com/catalog/card-names");
+                const data = await response.json();
+                appState.cardNames = data.data;
+                appState.fuse = new Fuse(appState.cardNames, { threshold: 0.4, minMatchCharLength: 3 });
+                loadingStatus.textContent = `Loaded ${appState.cardNames.length} card names.`;
+                cameraSetup.classList.remove('hidden');
+            } catch (e) {
+                loadingStatus.textContent = "Error: Could not load card catalog.";
+                console.error(e);
+                return;
+            }
+
+            // 2. Populate camera selection dropdown
+            try {
+                // We get devices without asking for permission first.
+                // Labels will be blank until the user grants permission.
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const videoDevices = devices.filter(d => d.kind === 'videoinput');
+                if (videoDevices.length === 0) {
+                    loadingStatus.textContent = "No camera devices found.";
+                    return;
+                }
+                videoDevices.forEach(device => {
+                    const option = document.createElement('option');
+                    option.value = device.deviceId;
+                    option.text = device.label || `Camera ${cameraSelect.length + 1}`;
+                    cameraSelect.appendChild(option);
+                });
+            } catch (e) {
+                loadingStatus.textContent = "Error: Could not access camera devices.";
+                console.error(e);
+            }
+        }
+
+        async function startScanner() {
+            if (!cameraSelect.value) {
+                alert("No camera selected.");
+                return;
+            }
+            try {
+                // The permission prompt will now happen here, when the user clicks the button.
+                appState.stream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        deviceId: { exact: cameraSelect.value },
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 }
+                    }
+                });
+                videoFeed.srcObject = appState.stream;
+                videoFeed.onloadedmetadata = () => {
+                    videoFeed.play();
+                    setupDiv.classList.add('hidden');
+                    scannerUiDiv.classList.remove('hidden');
+                    appState.isScanning = true;
+                    updateRoiBox();
+                    scanLoop();
+                };
+            } catch (e) {
+                alert("Failed to start camera. Please ensure permissions are granted.");
+                console.error(e);
+            }
+        }
+
+        function stopScanner() {
+            if (appState.stream) {
+                appState.stream.getTracks().forEach(track => track.stop());
+            }
+            appState.isScanning = false;
+            scannerUiDiv.classList.add('hidden');
+            setupDiv.classList.remove('hidden');
+            infoPanel.classList.add('hidden');
+            appState.lastCardData = null;
+        }
+
+        function updateRoiBox() {
+            const videoWidth = videoFeed.videoWidth;
+            const videoHeight = videoFeed.videoHeight;
+            roiBox.style.left = `${videoWidth * ROI_CONFIG.x}px`;
+            roiBox.style.top = `${videoHeight * ROI_CONFIG.y}px`;
+            roiBox.style.width = `${videoWidth * ROI_CONFIG.width}px`;
+            roiBox.style.height = `${videoHeight * ROI_CONFIG.height}px`;
+        }
+
+        async function scanLoop() {
+            if (!appState.isScanning) return;
+
+            const isOnCooldown = (Date.now() / 1000 - appState.lastScanTime) < SCAN_COOLDOWN;
+
+            if (isOnCooldown) {
+                const timeLeft = Math.ceil(SCAN_COOLDOWN - (Date.now() / 1000 - appState.lastScanTime));
+                statusDisplay.textContent = `Cooldown: ${timeLeft}s`;
+                roiBox.classList.remove('border-green-400');
+                roiBox.classList.add('border-red-400');
+            } else {
+                statusDisplay.textContent = 'Scanning...';
+                roiBox.classList.remove('border-red-400');
+                roiBox.classList.add('border-green-400');
+
+                if (videoFeed.readyState >= 2) {
+                    await processFrame();
+                }
+            }
+            
+            requestAnimationFrame(scanLoop);
+        }
+
+        async function processFrame() {
+            const videoWidth = videoFeed.videoWidth;
+            const videoHeight = videoFeed.videoHeight;
+            const ctx = ocrCanvas.getContext('2d');
+
+            const roi = {
+                x: videoWidth * ROI_CONFIG.x,
+                y: videoHeight * ROI_CONFIG.y,
+                width: videoWidth * ROI_CONFIG.width,
+                height: videoHeight * ROI_CONFIG.height
+            };
+
+            ocrCanvas.width = roi.width;
+            ocrCanvas.height = roi.height;
+            ctx.drawImage(videoFeed, roi.x, roi.y, roi.width, roi.height, 0, 0, roi.width, roi.height);
+
+            try {
+                const { data: { text } } = await Tesseract.recognize(ocrCanvas, 'eng');
+                const cleanedText = text.trim().replace(/[^a-zA-Z\s,']/g, "");
+
+                if (cleanedText.length > 2 && appState.fuse) {
+                    const results = appState.fuse.search(cleanedText);
+                    if (results.length > 0) {
+                        const bestMatch = results[0];
+                        if (bestMatch.score < (1 - MATCH_CONFIDENCE_THRESHOLD)) {
+                            appState.recentReads.push(bestMatch.item);
+                            validateReads();
+                        }
+                    }
+                }
+            } catch (e) {
+                console.warn("OCR failed on this frame:", e);
+            }
+        }
+
+        function validateReads() {
+            if (appState.recentReads.length > REQUIRED_CONSECUTIVE_MATCHES) {
+                appState.recentReads.shift();
+            }
+            if (appState.recentReads.length === REQUIRED_CONSECUTIVE_MATCHES && new Set(appState.recentReads).size === 1) {
+                const confidentRead = appState.recentReads[0];
+                if (confidentRead.toLowerCase() !== appState.lastCardData?.name.toLowerCase()) {
+                    console.log("Confident read:", confidentRead);
+                    appState.lastScanTime = Date.now() / 1000;
+                    appState.recentReads = [];
+                    fetchCardData(confidentRead);
+                }
+            }
+        }
+
+        async function fetchCardData(cardName) {
+            statusDisplay.textContent = `Validated: ${cardName}! Fetching...`;
+            try {
+                const response = await fetch(`https://api.scryfall.com/cards/named?exact=${encodeURIComponent(cardName)}`);
+                if (response.ok) {
+                    const data = await response.json();
+                    appState.lastCardData = data;
+                    updateInfoPanel(data);
+                }
+            } catch (e) {
+                console.error("API fetch failed:", e);
+                statusDisplay.textContent = `Failed to fetch data for ${cardName}.`;
+            }
+        }
+
+        function updateInfoPanel(card) {
+            infoPanel.classList.remove('hidden');
+            let keywordsHTML = '';
+            if (card.keywords && card.keywords.length > 0) {
+                keywordsHTML = `<p class="text-sm text-gray-300 capitalize">${card.keywords.join(', ')}</p>`;
+            }
+
+            let ptHTML = '';
+            if (card.power) {
+                ptHTML = `<p class="text-lg font-bold">${card.power}/${card.toughness}</p>`;
+            } else if (card.loyalty) {
+                ptHTML = `<p class="text-lg font-bold">Loyalty: ${card.loyalty}</p>`;
+            }
+            
+            infoPanel.innerHTML = `
+                <div class="space-y-3">
+                    <h2 class="text-xl font-bold">${card.name}</h2>
+                    <p class="text-lg font-semibold">${card.mana_cost || ''}</p>
+                    <p class="text-md">${card.type_line}</p>
+                    <p class="text-sm capitalize text-gray-400">${card.rarity}</p>
+                    ${keywordsHTML}
+                    <div class="text-sm text-gray-300 space-y-2 border-t border-gray-600 pt-2">${card.oracle_text.replace(/\n/g, '<br>')}</div>
+                    ${ptHTML}
+                </div>
+            `;
+        }
+
+        // --- Event Listeners ---
+        startBtn.addEventListener('click', startScanner);
+        stopBtn.addEventListener('click', stopScanner);
+
+        // --- Initial Load ---
+        initialize();
+
+    </script>
+</body>
+</html>
