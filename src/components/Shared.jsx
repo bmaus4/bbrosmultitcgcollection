@@ -204,7 +204,8 @@ export const CardHoverLink = ({ name }) => {
         setShowPreview(true);
         if (!imageUrl) {
             try {
-                const response = await fetch(`https://api.scryfall.com/cards/named?exact=${encodeURIComponent(name)}`);
+                // Using the fuzzy search endpoint is safer for AI-generated names
+                const response = await fetch(`https://api.scryfall.com/cards/named?fuzzy=${encodeURIComponent(name)}`);
                 const data = await response.json();
                 setImageUrl(data.image_uris?.normal);
             } catch (e) {
@@ -215,7 +216,7 @@ export const CardHoverLink = ({ name }) => {
 
     return (
         <span 
-            className="relative inline-block text-indigo-400 font-semibold cursor-help underline decoration-dotted"
+            className="relative inline-block text-indigo-400 font-semibold cursor-help underline decoration-dotted ml-1 mr-1"
             onMouseEnter={handleMouseEnter}
             onMouseLeave={() => setShowPreview(false)}
         >
