@@ -4,10 +4,10 @@ import Tesseract from 'tesseract.js';
 import Fuse from 'fuse.js';
 import { Spinner } from '../../components/Shared';
 
-// Configuration: Relaxed constraints for faster mobile scanning
+// RELAXED CONSTRAINTS FOR BETTER HIT RATE
 const REQUIRED_CONSECUTIVE_MATCHES = 1; // Instant feedback
-const MATCH_THRESHOLD = 0.3; // Looser matching (0.0 is perfect, 1.0 is no match)
-const SCAN_COOLDOWN = 2; // Seconds between scans
+const MATCH_THRESHOLD = 0.3; // Looser matching (0.0 is perfect, 1.0 is awful)
+const SCAN_COOLDOWN = 2; 
 
 const CardScanner = ({ onCardScanned, showMessage }) => {
     const [isScanning, setIsScanning] = useState(false);
