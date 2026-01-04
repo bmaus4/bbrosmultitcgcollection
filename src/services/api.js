@@ -120,6 +120,7 @@ const callGeminiAPI = async (prompt) => {
     const apiKey = process.env.REACT_APP_GEMINI_API_KEY;
     if (!apiKey) throw new Error("Gemini API Key missing. Please check your .env or Netlify settings.");
 
+    // Using the stable flash model
     const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
 
     const payload = {
@@ -141,42 +142,21 @@ const callGeminiAPI = async (prompt) => {
     return result.candidates?.[0]?.content?.parts?.[0]?.text || "";
 };
 
-export const getGeminiDeckAnalysis = async (activeDeck, collection) => {
-    const cardCount = activeDeck.cards.reduce((acc, c) => acc + c.quantity, 0);
+export const getGeminiDeckAnalysis = async (activeDeck) => {
     const cardList = activeDeck.cards.map(c => `${c.quantity}x ${c.name}`).join(', ');
     const commanderName = activeDeck.commander ? activeDeck.commander.name : "None";
-    
-    // Filter collection for relevant cards to avoid token limits
-    // Only send first 50 rare/mythics that match color identity as a sample
-    const collectionSample = collection
-        .filter(c => c.rarity !== 'common' && c.rarity !== 'uncommon')
-        .slice(0, 50)
-        .map(c => c.name)
-        .join(', ');
-
-    let task = "";
-    if (cardCount > 100) {
-        task = `The deck has ${cardCount} cards (Limit 100). You MUST suggest exactly ${cardCount - 100} specific cuts to make the deck legal and optimized. Do NOT suggest additions.`;
-    } else {
-        task = `Suggest 3 specific card additions from the "Available Collection" below, and 3 cards to buy (Outside Collection) to improve the deck. Also suggest 3 weak cards to cut to make room.`;
-    }
 
     const prompt = `Analyze this Magic: The Gathering deck.
     Format: ${activeDeck.format}
     Commander: ${commanderName}
     Cards: ${cardList}
     
-    Available Collection (Sample): ${collectionSample}
+    1. Determine the Power Level Bracket (Exhibition, Core, Upgraded, Optimized, or cEDH).
+    2. Analyze consistency, win cons, and interaction.
+    3. Suggest 3 specific card additions to improve the deck.
+    4. Suggest 3 cuts.
     
-    Task: ${task}
-    
-    1. Determine Power Level Bracket (Exhibition, Core, Upgraded, Optimized, or cEDH).
-    2. Analyze consistency/win cons.
-    
-    IMPORTANT FORMATTING:
-    - You MUST wrap ALL card names (both suggestions and cuts) in double brackets like this: [[Sol Ring]], [[Arcane Signet]].
-    - Use HTML tags (<b>, <ul>, <li>) for structure.
-    `;
+    Format using simple HTML tags (<b>, <ul>, <li>) for readability.`;
 
     const response = await callGeminiAPI(prompt);
     if (!response) throw new Error("AI returned an empty analysis.");
@@ -211,7 +191,7 @@ export const askMtgRules = async (question, contextCards = []) => {
     const prompt = `You are a Level 3 Magic Judge. Answer this rule question: "${question}"
     ${context}
     
-    Be concise. Cite rules if necessary. Use HTML for formatting. Wrap card names in [[brackets]] like [[Black Lotus]].`;
+    Be concise. Cite rules if necessary. Use HTML for formatting.`;
 
     const response = await callGeminiAPI(prompt);
     return response || "The Judge is silent.";
