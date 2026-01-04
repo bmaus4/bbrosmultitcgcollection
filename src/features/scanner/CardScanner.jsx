@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { RefreshCw } from 'lucide-react';
 import Tesseract from 'tesseract.js';
 import Fuse from 'fuse.js';
-import { Spinner } from '../../components/Shared';
 
 // RELAXED CONSTRAINTS FOR BETTER HIT RATE
 const REQUIRED_CONSECUTIVE_MATCHES = 1; // Instant feedback
