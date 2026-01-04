@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { X, PlusCircle, MinusCircle, DollarSign } from 'lucide-react';
 import { getKeywordDefinitions } from '../services/api';
 import { format } from 'd3-format';
@@ -30,7 +30,7 @@ export const Spinner = ({ text = "Loading..." }) => (
 // Custom hook for long-press functionality
 const useLongPress = (callback, ms = 200) => {
     const [startLongPress, setStartLongPress] = useState(false);
-    const intervalRef = React.useRef();
+    const intervalRef = useRef();
 
     useEffect(() => {
         if (startLongPress) {
@@ -191,5 +191,40 @@ export const CardDetailModal = ({ tcg, card, onClose }) => {
                 </div>
             </div>
         </Modal>
+    );
+};
+
+// NEW: A component to show card image on hover
+export const CardHoverLink = ({ name }) => {
+    const [showPreview, setShowPreview] = useState(false);
+    const [imageUrl, setImageUrl] = useState(null);
+
+    // Fetch image on hover to save bandwidth
+    const handleMouseEnter = async () => {
+        setShowPreview(true);
+        if (!imageUrl) {
+            try {
+                const response = await fetch(`https://api.scryfall.com/cards/named?exact=${encodeURIComponent(name)}`);
+                const data = await response.json();
+                setImageUrl(data.image_uris?.normal);
+            } catch (e) {
+                console.error("Failed to preview card", e);
+            }
+        }
+    };
+
+    return (
+        <span 
+            className="relative inline-block text-indigo-400 font-semibold cursor-help underline decoration-dotted"
+            onMouseEnter={handleMouseEnter}
+            onMouseLeave={() => setShowPreview(false)}
+        >
+            {name}
+            {showPreview && imageUrl && (
+                <div className="absolute z-50 bottom-full left-1/2 -translate-x-1/2 mb-2 w-48 rounded-lg shadow-xl bg-black border border-indigo-500 overflow-hidden pointer-events-none">
+                    <img src={imageUrl} alt={name} className="w-full h-auto" />
+                </div>
+            )}
+        </span>
     );
 };
