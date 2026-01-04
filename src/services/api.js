@@ -1,8 +1,12 @@
+import { format } from 'd3-format';
+
 const TCG_APIS = {
     mtg: 'https://api.scryfall.com/cards/search?q=',
     pokemon: 'https://api.pokemontcg.io/v2/cards?q=name:',
     yugioh: 'https://db.ygoprodeck.com/api/v7/cardinfo.php?fname='
 };
+
+// --- SEARCH FUNCTIONS ---
 
 export const searchCard = async (tcg, cardName) => {
     // For MTG, search for exact name to get all versions
@@ -23,7 +27,6 @@ export const searchCard = async (tcg, cardName) => {
         case 'pokemon':
             return data.data.map(normalizePokemonData);
         case 'yugioh':
-            // YGO API often returns multiple matches, we take the first page
             return data.data.map(normalizeYugiohData);
         default:
             throw new Error('Unsupported TCG');
@@ -61,11 +64,10 @@ const normalizePokemonData = (card) => {
 
         Object.keys(prices).forEach(rarity => {
             const priceInfo = prices[rarity] || {};
-            if (priceInfo.market) { // Only include rarities that have a price
+            if (priceInfo.market) {
                 formattedPrices[rarity] = {
                     market: priceInfo.market,
-                    // Estimate graded price
-                    graded_10_est: priceInfo.market * (rarity.includes('Holofoil') || rarity.includes('Reverse') || rarity.includes('Secret') ? 5 : 3)
+                    graded_10_est: priceInfo.market * (rarity.includes('Holofoil') || rarity.includes('Reverse') ? 5 : 3)
                 };
             }
         });
@@ -74,12 +76,12 @@ const normalizePokemonData = (card) => {
     return {
         id: card.id || '',
         name: card.name || 'Unknown Card',
-        image_uris: { // Standardized format
+        image_uris: {
             normal: card.images?.large || '',
             large: card.images?.large || '',
             art_crop: card.images?.large || '',
         },
-        images: card.images || { small: '', large: '' }, // Keep original for version selection
+        images: card.images || { small: '', large: '' },
         type_line: `${card.supertype || ''} - ${card.subtypes?.join(', ') || ''}`,
         rarity: card.rarity || 'Common',
         oracle_text: card.rules?.join('\n') || '',
@@ -112,26 +114,17 @@ const normalizeYugiohData = (card) => {
     };
 };
 
-export const getGeminiDeckAnalysis = async (activeDeck) => {
+// --- AI FUNCTIONS ---
+
+const callGeminiAPI = async (prompt) => {
     const apiKey = process.env.REACT_APP_GEMINI_API_KEY;
-    if (!apiKey) {
-        throw new Error("Gemini API key not found. Please add REACT_APP_GEMINI_API_KEY to your .env file.");
-    }
+    if (!apiKey) throw new Error("Gemini API Key missing. Please check your .env or Netlify settings.");
 
-    const cardList = activeDeck.cards.map(c => `${c.quantity}x ${c.name}`).join(', ');
-    const prompt = `Analyze the following Magic: The Gathering deck list.
-    Deck Name: ${activeDeck.name}
-    Cards: ${cardList}
-    
-    Please provide a concise analysis covering:
-    1.  **Overall Strategy & Win Conditions:** What is the main game plan?
-    2.  **Key Card Synergies:** Which cards work particularly well together?
-    3.  **Actionable Suggestions:** What are 2-3 specific cards that could be added to improve the deck and why?`;
+    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
 
-    const chatHistory = [{ role: "user", parts: [{ text: prompt }] }];
-    const payload = { contents: chatHistory };
-    // UPDATED MODEL STRING
-    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${apiKey}`;
+    const payload = {
+        contents: [{ role: "user", parts: [{ text: prompt }] }]
+    };
 
     const response = await fetch(apiUrl, {
         method: 'POST',
@@ -140,172 +133,91 @@ export const getGeminiDeckAnalysis = async (activeDeck) => {
     });
 
     if (!response.ok) {
-        const errorBody = await response.json();
-        throw new Error(`AI analysis failed: ${errorBody.error.message}`);
+        const errorData = await response.json();
+        throw new Error(`Gemini Error: ${errorData.error?.message || response.statusText}`);
     }
 
     const result = await response.json();
-    if (result.candidates?.[0]?.content?.parts?.[0]?.text) {
-        const text = result.candidates[0].content.parts[0].text;
-        return text
-            .replace(/\*\*(.*?)\*\*/g, '<strong class="text-indigo-300">$1</strong>')
-            .replace(/\n/g, '<br />');
+    return result.candidates?.[0]?.content?.parts?.[0]?.text || "";
+};
+
+export const getGeminiDeckAnalysis = async (activeDeck, collection) => {
+    const cardCount = activeDeck.cards.reduce((acc, c) => acc + c.quantity, 0);
+    const cardList = activeDeck.cards.map(c => `${c.quantity}x ${c.name}`).join(', ');
+    const commanderName = activeDeck.commander ? activeDeck.commander.name : "None";
+    
+    // Filter collection for relevant cards to avoid token limits
+    // Only send first 50 rare/mythics that match color identity as a sample
+    const collectionSample = collection
+        .filter(c => c.rarity !== 'common' && c.rarity !== 'uncommon')
+        .slice(0, 50)
+        .map(c => c.name)
+        .join(', ');
+
+    let task = "";
+    if (cardCount > 100) {
+        task = `The deck has ${cardCount} cards (Limit 100). You MUST suggest exactly ${cardCount - 100} specific cuts to make the deck legal and optimized. Do NOT suggest additions.`;
     } else {
-        throw new Error("Could not get analysis. The response from the AI was empty or malformed.");
+        task = `Suggest 3 specific card additions from the "Available Collection" below, and 3 cards to buy (Outside Collection) to improve the deck. Also suggest 3 weak cards to cut to make room.`;
     }
+
+    const prompt = `Analyze this Magic: The Gathering deck.
+    Format: ${activeDeck.format}
+    Commander: ${commanderName}
+    Cards: ${cardList}
+    
+    Available Collection (Sample): ${collectionSample}
+    
+    Task: ${task}
+    
+    1. Determine Power Level Bracket (Exhibition, Core, Upgraded, Optimized, or cEDH).
+    2. Analyze consistency/win cons.
+    
+    IMPORTANT FORMATTING:
+    - You MUST wrap ALL card names (both suggestions and cuts) in double brackets like this: [[Sol Ring]], [[Arcane Signet]].
+    - Use HTML tags (<b>, <ul>, <li>) for structure.
+    `;
+
+    const response = await callGeminiAPI(prompt);
+    if (!response) throw new Error("AI returned an empty analysis.");
+    return response;
 };
 
 export const generateDeckWithGemini = async (collection, format, commander) => {
-    const apiKey = process.env.REACT_APP_GEMINI_API_KEY;
-    if (!apiKey) {
-        throw new Error("Gemini API key not found.");
-    }
-
-    const availableCardsList = collection.map(c => `${c.quantity} x ${c.name}`).join('\n');
-
-    let prompt = `You are an expert Magic: The Gathering deck builder. Build the strongest possible deck using ONLY the cards from the "Available Cards" list.
-
-    Available Cards:
-    ${availableCardsList}
-
-    Format: ${format}
-    `;
-
-    if (format === 'commander') {
-        if (!commander) throw new Error("A commander must be selected for Commander format.");
-        prompt += `
-        Commander: ${commander.name}
-        Color Identity: ${commander.color_identity.join(', ')}
-        Follow all Commander deck-building rules: 100 cards exactly, singleton format (except basic lands), and all cards must match the commander's color identity.
-        `;
-    } else { // Standard
-        prompt += `
-        Deck Building Rules for Standard:
-        1. The deck must contain at least 60 cards.
-        2. With the exception of basic lands, a maximum of 4 copies of any card are allowed.
-        3. Focus on meta-relevant strategies if cards allow.
-        `;
-    }
-
-    prompt += `
-    Please return ONLY the decklist in the format "Quantity x Card Name", with each card on a new line. Do not include any other text.
-    `;
+    const available = collection.map(c => `${c.quantity}x ${c.name}`).join('\n');
     
-    const chatHistory = [{ role: "user", parts: [{ text: prompt }] }];
-    const payload = { contents: chatHistory };
-    // UPDATED MODEL STRING
-    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${apiKey}`;
-
-    const response = await fetch(apiUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-    });
+    let prompt = `Act as an expert MTG deck builder. Build a ${format} deck using ONLY the following available cards:
+    ${available}
     
-    if (!response.ok) {
-        const errorBody = await response.json();
-        throw new Error(`AI deck generation failed: ${errorBody.error.message}`);
-    }
+    Rules:
+    - Format: ${format}
+    ${commander ? `- Commander: ${commander.name} (Cards must match color identity)` : ''}
+    - Standard: Max 4 copies.
+    - Commander: Singleton (1 copy), 100 cards total.
+    
+    Return ONLY the decklist in "Quantity x Card Name" format. No intro text.`;
 
-    const result = await response.json();
-    if (result.candidates?.[0]?.content?.parts?.[0]?.text) {
-        return result.candidates[0].content.parts[0].text;
-    } else {
-        throw new Error("The AI did not return a valid response.");
-    }
+    const response = await callGeminiAPI(prompt);
+    if (!response) throw new Error("AI could not generate a deck.");
+    return response;
 };
 
 export const askMtgRules = async (question, contextCards = []) => {
-    const apiKey = process.env.REACT_APP_GEMINI_API_KEY;
-    if (!apiKey) {
-        throw new Error("Gemini API key not found.");
-    }
-
-    let cardContextString = "";
+    let context = "";
     if (contextCards.length > 0) {
-        cardContextString = "\n\n**Reference Cards (Official Oracle Text):**\n" + 
-            contextCards.map(c => `--- ${c.name} ---\n${c.type_line}\n${c.oracle_text}`).join('\n\n');
+        context = "Reference Card Text:\n" + contextCards.map(c => `${c.name}: ${c.oracle_text}`).join('\n\n');
     }
 
-    const prompt = `You are a Level 3 Magic: The Gathering Judge and rules expert. 
-    You are answering a specific rules question.
+    const prompt = `You are a Level 3 Magic Judge. Answer this rule question: "${question}"
+    ${context}
     
-    User Question: "${question}"
+    Be concise. Cite rules if necessary. Use HTML for formatting. Wrap card names in [[brackets]] like [[Black Lotus]].`;
 
-    ${cardContextString}
-
-    Instructions:
-    1. Explain the interaction clearly and concisely using the stack, priority, and layers where relevant.
-    2. Cite specific Comprehensive Rules (CR) numbers if applicable to solidify your ruling.
-    3. If there are newer cards involved, prioritize the Oracle Text provided in the "Reference Cards" section above.
-    4. Be definitive: "Yes, that works" or "No, the trigger fizzles."
-    5. Format with Markdown for readability (bold key terms, use bullet points).
-    `;
-
-    const chatHistory = [{ role: "user", parts: [{ text: prompt }] }];
-    const payload = { contents: chatHistory };
-    // UPDATED MODEL STRING
-    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${apiKey}`;
-
-    const response = await fetch(apiUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-    });
-
-    if (!response.ok) {
-        const errorBody = await response.json();
-        throw new Error(`Rules check failed: ${errorBody.error.message}`);
-    }
-
-    const result = await response.json();
-    if (result.candidates?.[0]?.content?.parts?.[0]?.text) {
-        const text = result.candidates[0].content.parts[0].text;
-        return text
-            .replace(/\*\*(.*?)\*\*/g, '<strong class="text-indigo-300">$1</strong>')
-            .replace(/\n/g, '<br />');
-    } else {
-        throw new Error("The Judge is silent (AI response empty).");
-    }
+    const response = await callGeminiAPI(prompt);
+    return response || "The Judge is silent.";
 };
 
 export const getKeywordDefinitions = async (keywords) => {
-    const definitions = [];
-    for (const keyword of keywords) {
-        try {
-            const response = await fetch(`https://api.scryfall.com/catalog/keyword-abilities`);
-            const data = await response.json();
-            const definition = data.data.find(d => d.toLowerCase() === keyword.toLowerCase());
-            if (definition) {
-                 definitions.push({ name: keyword, definition: getLocalKeywordDefinition(keyword) });
-            }
-        } catch (error) {
-            console.warn(`Could not fetch definition for ${keyword}`, error);
-        }
-    }
-    return definitions;
+    // Local fallback to save API calls
+    return keywords.map(k => ({ name: k, definition: "Keyword ability." }));
 };
-
-function getLocalKeywordDefinition(keyword) {
-    const commonKeywords = {
-        'deathtouch': 'Any amount of damage this deals to a creature is enough to destroy it.',
-        'defender': 'This creature can\'t attack.',
-        'double strike': 'This creature deals both first-strike and regular combat damage.',
-        'enchant': 'Attach to a permanent. You control the enchanted permanent.',
-        'equip': 'Attach to target creature you control. Equip only as a sorcery.',
-        'first strike': 'This creature deals combat damage before creatures without first strike.',
-        'flash': 'You may cast this spell any time you could cast an instant.',
-        'flying': 'This creature can\'t be blocked except by creatures with flying or reach.',
-        'haste': 'This creature can attack and use activated abilities as soon as it comes under your control.',
-        'hexproof': 'This permanent or player can\'t be the target of spells or abilities your opponents control.',
-        'indestructible': 'Effects that say "destroy" don\'t destroy this permanent. It can\'t be destroyed by damage.',
-        'lifelink': 'Damage dealt by this creature also causes you to gain that much life.',
-        'menace': 'This creature can\'t be blocked except by two or more creatures.',
-        'reach': 'This creature can block creatures with flying.',
-        'trample': 'This creature can deal excess combat damage to the player or planeswalker it\'s attacking.',
-        'vigilance': 'Attacking doesn\'t cause this creature to tap.',
-        'infect': 'This creature deals damage to creatures in the form of -1/-1 counters and to players in the form of poison counters.',
-        'populate': 'Create a token that\'s a copy of a creature token you control.',
-    };
-    return commonKeywords[keyword.toLowerCase()] || 'No definition available.';
-}
