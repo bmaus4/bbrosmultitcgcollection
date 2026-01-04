@@ -119,7 +119,7 @@ const callGeminiAPI = async (prompt) => {
     if (!apiKey) throw new Error("Gemini API Key missing. Please check your .env or Netlify settings.");
 
     // Using the stable flash model
-    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${apiKey}`;
 
     const payload = {
         contents: [{ role: "user", parts: [{ text: prompt }] }]
@@ -161,24 +161,6 @@ export const getGeminiDeckAnalysis = async (activeDeck) => {
     return response;
 };
 
-export const generateDeckWithGemini = async (collection, format, commander) => {
-    const available = collection.map(c => `${c.quantity}x ${c.name}`).join('\n');
-    
-    let prompt = `Act as an expert MTG deck builder. Build a ${format} deck using ONLY the following available cards:
-    ${available}
-    
-    Rules:
-    - Format: ${format}
-    ${commander ? `- Commander: ${commander.name} (Cards must match color identity)` : ''}
-    - Standard: Max 4 copies.
-    - Commander: Singleton (1 copy), 100 cards total.
-    
-    Return ONLY the decklist in "Quantity x Card Name" format. No intro text.`;
-
-    const response = await callGeminiAPI(prompt);
-    if (!response) throw new Error("AI could not generate a deck.");
-    return response;
-};
 
 export const askMtgRules = async (question, contextCards = []) => {
     let context = "";
