@@ -1,110 +1,111 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
+import { CardHoverLink, Modal, CardDisplay } from '../../components/Shared';
 
-const COLORS = ['#FFFFFF', '#4299E1', '#1A202C', '#E53E3E', '#38A169', '#718096'];
-const PIE_COLORS = {
-    White: '#F7FAFC',
-    Blue: '#63B3ED',
-    Black: '#2D3748',
-    Red: '#F56565',
-    Green: '#68D391',
-    Colorless: '#A0AEC0',
-    Multi: '#B794F4',
-};
+const COLORS = ['#FFFFFF', '#4299E1', '#1A202C', '#E53E3E', '#38A169', '#718096', '#D6BCFA', '#F6E05E'];
 
 const DeckAnalysis = ({ deck }) => {
+    const [selectedCmc, setSelectedCmc] = useState(null);
 
     const analysisData = useMemo(() => {
         if (!deck || deck.cards.length === 0) return null;
 
         const allCards = deck.cards.flatMap(c => Array(c.quantity).fill(c));
         const nonLandCards = allCards.filter(card => !card.type_line.toLowerCase().includes('land'));
+        const lands = allCards.filter(card => card.type_line.toLowerCase().includes('land'));
 
         // Mana Curve
-        const manaCurve = Array(8).fill(0).map((_, i) => ({ cmc: i, count: 0 }));
-        manaCurve.push({ cmc: '8+', count: 0 });
+        const manaCurve = Array(8).fill(0).map((_, i) => ({ cmc: i, count: 0, cards: [] }));
+        manaCurve.push({ cmc: '8+', count: 0, cards: [] });
 
         nonLandCards.forEach(card => {
-            const cmc = card.cmc || 0;
-            if (cmc >= 8) {
-                manaCurve[8].count++;
-            } else {
-                manaCurve[cmc].count++;
-            }
+            const cmc = Math.floor(card.cmc || 0);
+            const index = cmc >= 8 ? 8 : cmc;
+            manaCurve[index].count++;
+            manaCurve[index].cards.push(card);
         });
 
         const avgCmc = nonLandCards.length > 0 
             ? (nonLandCards.reduce((acc, c) => acc + (c.cmc || 0), 0) / nonLandCards.length).toFixed(2)
             : '0.00';
 
-        // Card Types
-        const cardTypes = {};
+        // Card Types (Simplified)
+        const simplifiedTypes = { Creature: 0, Instant: 0, Sorcery: 0, Enchantment: 0, Artifact: 0, Planeswalker: 0, Land: 0 };
         allCards.forEach(card => {
-            const type = card.type_line.split('—')[0].trim();
-            cardTypes[type] = (cardTypes[type] || 0) + 1;
+            const t = card.type_line.toLowerCase();
+            if (t.includes('land')) simplifiedTypes.Land++;
+            else if (t.includes('creature')) simplifiedTypes.Creature++;
+            else if (t.includes('instant')) simplifiedTypes.Instant++;
+            else if (t.includes('sorcery')) simplifiedTypes.Sorcery++;
+            else if (t.includes('planeswalker')) simplifiedTypes.Planeswalker++;
+            else if (t.includes('enchantment')) simplifiedTypes.Enchantment++;
+            else if (t.includes('artifact')) simplifiedTypes.Artifact++;
         });
-        const typeData = Object.entries(cardTypes).map(([name, value]) => ({ name, value })).sort((a,b) => b.value - a.value);
+        const typeData = Object.entries(simplifiedTypes)
+            .filter(([, val]) => val > 0)
+            .map(([name, value]) => ({ name, value }));
         
-        // Color Distribution
-        const colorDistribution = { White: 0, Blue: 0, Black: 0, Red: 0, Green: 0, Colorless: 0, Multi: 0 };
-        allCards.forEach(card => {
-             if (card.colors && card.colors.length > 1) {
-                colorDistribution.Multi++;
-            } else if (card.colors && card.colors.length === 1) {
-                const colorMap = { 'W': 'White', 'U': 'Blue', 'B': 'Black', 'R': 'Red', 'G': 'Green' };
-                colorDistribution[colorMap[card.colors[0]]]++;
-            } else {
-                colorDistribution.Colorless++;
-            }
-        });
-        const colorData = Object.entries(colorDistribution).filter(([,value]) => value > 0).map(([name, value]) => ({ name, value }));
+        // Color Distribution Helper
+        const getColorData = (cards) => {
+            const counts = { White: 0, Blue: 0, Black: 0, Red: 0, Green: 0, Colorless: 0, Multi: 0 };
+            cards.forEach(card => {
+                if (card.color_identity && card.color_identity.length > 1) counts.Multi++;
+                else if (card.color_identity && card.color_identity.length === 1) {
+                    const map = { 'W': 'White', 'U': 'Blue', 'B': 'Black', 'R': 'Red', 'G': 'Green' };
+                    counts[map[card.color_identity[0]]]++;
+                } else counts.Colorless++;
+            });
+            return Object.entries(counts).filter(([, v]) => v > 0).map(([name, value]) => ({ name, value }));
+        };
 
-        // Creature Subtypes (MTG only)
-        let creatureSubtypeData = [];
-        if (deck.format !== 'unlimited') { // Assuming only MTG has formats other than unlimited
-            const creatureSubtypes = {};
-            allCards
-                .filter(c => c.type_line.includes('Creature'))
-                .forEach(c => {
-                    const subtypes = c.type_line.split('—')[1];
-                    if (subtypes) {
-                        subtypes.trim().split(' ').forEach(subtype => {
-                            creatureSubtypes[subtype] = (creatureSubtypes[subtype] || 0) + 1;
-                        });
-                    }
-                });
-            creatureSubtypeData = Object.entries(creatureSubtypes)
-                .map(([name, value]) => ({ name, value }))
-                .sort((a, b) => b.value - a.value)
-                .slice(0, 10); // Show top 10 for clarity
-        }
+        const landColorData = getColorData(lands);
+        const spellColorData = getColorData(nonLandCards);
 
-        return { manaCurve, avgCmc, typeData, colorData, creatureSubtypeData };
+        return { manaCurve, avgCmc, typeData, landColorData, spellColorData };
     }, [deck]);
 
-    if (!analysisData) {
-        return <div className="text-center py-8 text-gray-400">No data to analyze.</div>;
-    }
+    if (!analysisData) return <div className="text-center py-8 text-gray-400">No data to analyze.</div>;
 
-    const { manaCurve, avgCmc, typeData, colorData, creatureSubtypeData } = analysisData;
+    const { manaCurve, avgCmc, typeData, landColorData, spellColorData } = analysisData;
+
+    // Helper to render AI Text with Hover Links
+    const renderAiText = (htmlString) => {
+        const parts = htmlString.split(/(\[\[.*?\]\])/g);
+        return parts.map((part, i) => {
+            if (part.startsWith('[[') && part.endsWith(']]')) {
+                const name = part.slice(2, -2);
+                return <CardHoverLink key={i} name={name} />;
+            }
+            return <span key={i} dangerouslySetInnerHTML={{ __html: part }} />;
+        });
+    };
 
     return (
         <div className="space-y-8">
             <h2 className="text-3xl font-bold text-indigo-300">Analysis for {deck.name}</h2>
             
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                {/* Mana Curve */}
                 <div className="bg-gray-800/50 p-6 rounded-2xl border border-gray-700">
                     <h3 className="text-xl font-semibold mb-4">Mana Curve (Avg: {avgCmc})</h3>
+                    <p className="text-xs text-gray-400 mb-2">Click a bar to view cards</p>
                     <ResponsiveContainer width="100%" height={300}>
-                        <BarChart data={manaCurve} margin={{ top: 5, right: 20, left: -10, bottom: 5 }}>
+                        <BarChart data={manaCurve} margin={{ top: 5, right: 20, left: -10, bottom: 5 }}
+                            onClick={(data) => {
+                                if (data && data.activePayload && data.activePayload.length > 0) {
+                                    setSelectedCmc(data.activePayload[0].payload);
+                                }
+                            }}
+                        >
                             <XAxis dataKey="cmc" stroke="#9CA3AF" />
                             <YAxis allowDecimals={false} stroke="#9CA3AF" />
-                            <Tooltip contentStyle={{ backgroundColor: '#2D3748', border: '1px solid #4A5568' }} />
-                            <Bar dataKey="count" fill="#818CF8" />
+                            <Tooltip cursor={{fill: '#4A5568'}} contentStyle={{ backgroundColor: '#2D3748', border: '1px solid #4A5568' }} />
+                            <Bar dataKey="count" fill="#818CF8" style={{ cursor: 'pointer' }} />
                         </BarChart>
                     </ResponsiveContainer>
                 </div>
 
+                {/* Simplified Card Types */}
                 <div className="bg-gray-800/50 p-6 rounded-2xl border border-gray-700">
                     <h3 className="text-xl font-semibold mb-4">Card Types</h3>
                      <ResponsiveContainer width="100%" height={300}>
@@ -118,35 +119,50 @@ const DeckAnalysis = ({ deck }) => {
                     </ResponsiveContainer>
                 </div>
                 
+                {/* Non-Land Colors */}
                 <div className="bg-gray-800/50 p-6 rounded-2xl border border-gray-700">
-                    <h3 className="text-xl font-semibold mb-4">Color Distribution</h3>
+                    <h3 className="text-xl font-semibold mb-4">Spell Color Identity</h3>
                      <ResponsiveContainer width="100%" height={300}>
                         <PieChart>
-                            <Pie data={colorData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={100} label>
-                                {colorData.map((entry) => <Cell key={`cell-${entry.name}`} fill={PIE_COLORS[entry.name]} />)}
+                            <Pie data={spellColorData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={100} label>
+                                {spellColorData.map((entry, i) => <Cell key={i} fill={getPieColor(entry.name)} />)}
                             </Pie>
-                            <Tooltip contentStyle={{ backgroundColor: '#2D3748', border: '1px solid #4A5568' }} />
+                            <Tooltip />
                             <Legend />
                         </PieChart>
                     </ResponsiveContainer>
                 </div>
 
-                {creatureSubtypeData.length > 0 && (
-                     <div className="bg-gray-800/50 p-6 rounded-2xl border border-gray-700">
-                        <h3 className="text-xl font-semibold mb-4">Creature Types (Top 10)</h3>
-                        <ResponsiveContainer width="100%" height={300}>
-                            <BarChart data={creatureSubtypeData} layout="vertical" margin={{ top: 5, right: 20, left: 20, bottom: 5 }}>
-                                <XAxis type="number" stroke="#9CA3AF" />
-                                <YAxis type="category" dataKey="name" stroke="#9CA3AF" width={80} />
-                                <Tooltip contentStyle={{ backgroundColor: '#2D3748', border: '1px solid #4A5568' }} />
-                                <Bar dataKey="value" fill="#4FD1C5" />
-                            </BarChart>
-                        </ResponsiveContainer>
-                    </div>
-                )}
+                 {/* Land Colors */}
+                 <div className="bg-gray-800/50 p-6 rounded-2xl border border-gray-700">
+                    <h3 className="text-xl font-semibold mb-4">Land Color Identity</h3>
+                     <ResponsiveContainer width="100%" height={300}>
+                        <PieChart>
+                            <Pie data={landColorData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={100} label>
+                                {landColorData.map((entry, i) => <Cell key={i} fill={getPieColor(entry.name)} />)}
+                            </Pie>
+                            <Tooltip />
+                            <Legend />
+                        </PieChart>
+                    </ResponsiveContainer>
+                </div>
             </div>
+
+            {/* Modal for Mana Curve Interaction */}
+            <Modal isOpen={!!selectedCmc} onClose={() => setSelectedCmc(null)} title={`Cards with Mana Value: ${selectedCmc?.cmc}`}>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    {selectedCmc?.cards.map(card => (
+                        <div key={card.id}><CardDisplay card={card} tcg="mtg" /></div>
+                    ))}
+                </div>
+            </Modal>
         </div>
     );
+};
+
+const getPieColor = (name) => {
+    const map = { White: '#F7FAFC', Blue: '#63B3ED', Black: '#2D3748', Red: '#F56565', Green: '#68D391', Colorless: '#A0AEC0', Multi: '#D6BCFA' };
+    return map[name] || '#CBD5E0';
 };
 
 export default DeckAnalysis;
