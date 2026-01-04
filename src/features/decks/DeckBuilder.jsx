@@ -1,9 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { X, PlusCircle, Trash2, BrainCircuit, MinusCircle, CheckCircle, Crown, Wand2, Filter, ChevronsUpDown } from 'lucide-react';
-import { Modal, Spinner, CardDetailModal, CardDisplay, CardHoverLink } from '../../components/Shared';
+import { X, PlusCircle, Trash2, BrainCircuit, MinusCircle, CheckCircle, Crown, Wand2, ChevronsUpDown } from 'lucide-react';
+import { Modal, Spinner, CardDetailModal, CardHoverLink } from '../../components/Shared';
 import { getGeminiDeckAnalysis, generateDeckWithGemini } from '../../services/api';
-
-// --- Local Components ---
 
 const CardDisplayWithControls = ({ card, onCardClick, deckControls }) => (
     <div className="bg-gray-800/50 rounded-lg overflow-hidden shadow-lg border border-gray-700 hover:border-indigo-500 transition-all duration-300 transform hover:-translate-y-1 group relative backdrop-blur-sm">
@@ -64,8 +62,6 @@ const DeckValidation = ({ deck, tcg }) => {
     );
 };
 
-// --- Main Component ---
-
 const DeckBuilder = ({ tcg, config, collection, decks, setDecks, activeDeckId, setActiveDeckId, showMessage }) => {
     const [newDeckModalOpen, setNewDeckModalOpen] = useState(false);
     const [aiGenerateModalOpen, setAIGenerateModalOpen] = useState(false);
@@ -106,7 +102,11 @@ const DeckBuilder = ({ tcg, config, collection, decks, setDecks, activeDeckId, s
         }));
     };
     
-    const handleDeleteClick = (deckId) => setConfirmDelete({ isOpen: true, deckId });
+    // Fixed: Now using this function to open the confirm delete modal
+    const confirmDeleteDeck = (deckId) => {
+        setConfirmDelete({ isOpen: true, deckId });
+    };
+
     const performDelete = () => {
         if (confirmDelete.deckId) {
             setDecks(decks.filter(d => d.id !== confirmDelete.deckId));
@@ -115,7 +115,7 @@ const DeckBuilder = ({ tcg, config, collection, decks, setDecks, activeDeckId, s
         }
     };
 
-    // Filter Logic
+    // Filter Logic copied from CollectionManager for consistency
     const filteredCollection = useMemo(() => {
         let items = [...collection];
         Object.entries(filters).forEach(([key, value]) => {
@@ -151,7 +151,7 @@ const DeckBuilder = ({ tcg, config, collection, decks, setDecks, activeDeckId, s
 
     const handleFilterChange = (e) => setFilters(prev => ({ ...prev, [e.target.name]: e.target.value }));
 
-    // AI Analysis Handler
+    // AI Analysis Handler with New Response Parsing
     const analyzeDeck = async () => {
         if (!activeDeck || activeDeck.cards.length === 0) {
             showMessage("Please select a deck with cards to analyze.", 'error');
@@ -171,6 +171,7 @@ const DeckBuilder = ({ tcg, config, collection, decks, setDecks, activeDeckId, s
     
     // Render Helper for AI Text with Tooltips
     const renderAiText = (htmlString) => {
+        if (!htmlString) return null;
         const parts = htmlString.split(/(\[\[.*?\]\])/g);
         return parts.map((part, i) => {
             if (part.startsWith('[[') && part.endsWith(']]')) {
@@ -249,7 +250,7 @@ const DeckBuilder = ({ tcg, config, collection, decks, setDecks, activeDeckId, s
                              {activeDeck.format === 'commander' &&
                                 <button onClick={() => setCommanderModalOpen(true)} className="flex items-center gap-2 px-4 py-2 bg-yellow-600 text-white rounded hover:bg-yellow-500 text-xs"><Crown size={14} /> Set Commander</button>
                             }
-                             <button onClick={() => setConfirmDelete({ isOpen: true, deckId: activeDeck.id })} className="p-2 text-red-400 hover:text-red-300"><Trash2 size={18}/></button>
+                             <button onClick={() => confirmDeleteDeck(activeDeck.id)} className="p-2 text-red-400 hover:text-red-300"><Trash2 size={18}/></button>
                         </div>
                     )}
                  </div>
@@ -334,7 +335,6 @@ const DeckBuilder = ({ tcg, config, collection, decks, setDecks, activeDeckId, s
             </Modal>
             
             <NewDeckModal isOpen={newDeckModalOpen} onClose={() => setNewDeckModalOpen(false)} onCreate={handleCreateDeck} formats={config.deckFormats} />
-            
             <AIGenerateDeckModal isOpen={aiGenerateModalOpen} onClose={() => setAIGenerateModalOpen(false)} onGenerate={handleAIGenerateDeck} legendaryCreatures={legendaryCreatures} formats={config.deckFormats} />
             
             <Modal isOpen={commanderModalOpen} onClose={() => setCommanderModalOpen(false)} title="Select a Commander">
@@ -359,8 +359,6 @@ const DeckBuilder = ({ tcg, config, collection, decks, setDecks, activeDeckId, s
         </div>
     );
 };
-
-// --- Helper Modals ---
 
 const NewDeckModal = ({ isOpen, onClose, onCreate, formats }) => {
     const [name, setName] = useState('');
