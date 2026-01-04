@@ -1,5 +1,3 @@
-import { format } from 'd3-format';
-
 const TCG_APIS = {
     mtg: 'https://api.scryfall.com/cards/search?q=',
     pokemon: 'https://api.pokemontcg.io/v2/cards?q=name:',
@@ -121,7 +119,7 @@ const callGeminiAPI = async (prompt) => {
     if (!apiKey) throw new Error("Gemini API Key missing. Please check your .env or Netlify settings.");
 
     // Using the stable flash model
-    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${apiKey}`;
 
     const payload = {
         contents: [{ role: "user", parts: [{ text: prompt }] }]
