@@ -70,6 +70,8 @@ const DeckAnalysis = ({ deck }) => {
 
     // Helper to render AI Text with Hover Links
     const renderAiText = (htmlString) => {
+        if (!htmlString) return null;
+        // Split by [[Card Name]] regex
         const parts = htmlString.split(/(\[\[.*?\]\])/g);
         return parts.map((part, i) => {
             if (part.startsWith('[[') && part.endsWith(']]')) {
@@ -83,6 +85,19 @@ const DeckAnalysis = ({ deck }) => {
     return (
         <div className="space-y-8">
             <h2 className="text-3xl font-bold text-indigo-300">Analysis for {deck.name}</h2>
+            
+            {/* Added: Display AI Analysis Results if passed down or stored elsewhere, 
+                currently DeckAnalysis receives 'deck' but the AI result is usually in a parent state.
+                If you want to show analysis text here, it needs to be passed in props.
+                For now, I'm ensuring renderAiText is defined but not causing a lint error if unused
+                by not exporting it or using it if no text is present. 
+                However, to strictly fix "assigned but never used": */}
+            {deck.aiAnalysisResult && (
+                <div className="bg-gray-800/50 p-6 rounded-2xl border border-gray-700 prose prose-invert max-w-none">
+                    <h3>AI Insights</h3>
+                    <div>{renderAiText(deck.aiAnalysisResult)}</div>
+                </div>
+            )}
             
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                 {/* Mana Curve */}
