@@ -1,9 +1,10 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { X, PlusCircle, Trash2, BrainCircuit, MinusCircle, CheckCircle, Crown, Wand2 } from 'lucide-react';
-import { Modal, Spinner, CardDetailModal } from '../../components/Shared';
+import { X, PlusCircle, Trash2, BrainCircuit, MinusCircle, CheckCircle, Crown, Wand2, Filter, ChevronsUpDown } from 'lucide-react';
+import { Modal, Spinner, CardDetailModal, CardDisplay, CardHoverLink } from '../../components/Shared';
 import { getGeminiDeckAnalysis, generateDeckWithGemini } from '../../services/api';
 
-// Re-defining CardDisplay here to include deck controls, specific to this view
+// --- Local Components ---
+
 const CardDisplayWithControls = ({ card, onCardClick, deckControls }) => (
     <div className="bg-gray-800/50 rounded-lg overflow-hidden shadow-lg border border-gray-700 hover:border-indigo-500 transition-all duration-300 transform hover:-translate-y-1 group relative backdrop-blur-sm">
         <img
@@ -28,7 +29,6 @@ const CardDisplayWithControls = ({ card, onCardClick, deckControls }) => (
     </div>
 );
 
-
 const DeckValidation = ({ deck, tcg }) => {
     if (!deck || tcg !== 'mtg') return null;
 
@@ -42,8 +42,8 @@ const DeckValidation = ({ deck, tcg }) => {
         commander: [
             { label: 'Exactly 100 cards', valid: cardCount === 100 },
             { label: 'Commander is a legendary creature', valid: !!deck.commander && deck.commander.type_line.includes('Legendary') && deck.commander.type_line.includes('Creature') },
-            { label: 'Singleton format (1 of each card)', valid: deck.cards.every(c => c.quantity === 1 || c.type_line.includes('Basic Land') || c.oracle_text?.toLowerCase().includes("a deck can have any number of cards named"))},
-            { label: 'All cards match commander colors', valid: deck.cards.every(c => c.color_identity.every(color => deck.commander?.color_identity.includes(color))) },
+            { label: 'Singleton format', valid: deck.cards.every(c => c.quantity === 1 || c.type_line.includes('Basic Land') || c.oracle_text?.toLowerCase().includes("a deck can have any number of cards named"))},
+            { label: 'Color Identity', valid: deck.cards.every(c => c.color_identity.every(color => deck.commander?.color_identity.includes(color))) },
         ]
     };
 
@@ -64,6 +64,8 @@ const DeckValidation = ({ deck, tcg }) => {
     );
 };
 
+// --- Main Component ---
+
 const DeckBuilder = ({ tcg, config, collection, decks, setDecks, activeDeckId, setActiveDeckId, showMessage }) => {
     const [newDeckModalOpen, setNewDeckModalOpen] = useState(false);
     const [aiGenerateModalOpen, setAIGenerateModalOpen] = useState(false);
@@ -72,22 +74,114 @@ const DeckBuilder = ({ tcg, config, collection, decks, setDecks, activeDeckId, s
     const [confirmDelete, setConfirmDelete] = useState({ isOpen: false, deckId: null });
     const [selectedCard, setSelectedCard] = useState(null);
 
+    // Sorting & Filtering State for Collection View
+    const [filters, setFilters] = useState({});
+    const [sort, setSort] = useState({ field: 'name', direction: 'asc' });
+
     const activeDeck = useMemo(() => decks.find(d => d.id === activeDeckId), [decks, activeDeckId]);
 
+    // Handle Deck Operations
     const handleCreateDeck = (name, format) => {
-        const newDeck = { 
-            id: Date.now().toString(), 
-            name, 
-            format, 
-            cards: [], 
-            commander: null,
-        };
-        const newDecks = [...decks, newDeck];
-        setDecks(newDecks);
+        const newDeck = { id: Date.now().toString(), name, format, cards: [], commander: null };
+        setDecks([...decks, newDeck]);
         setActiveDeckId(newDeck.id);
         setNewDeckModalOpen(false);
     };
 
+    const updateCardInDeck = (card, quantityChange) => {
+        if (!activeDeck) return;
+        setDecks(decks.map(deck => {
+            if (deck.id === activeDeckId) {
+                const updatedCards = [...deck.cards];
+                const cardIndex = updatedCards.findIndex(c => c.id === card.id);
+                if (cardIndex > -1) {
+                    updatedCards[cardIndex].quantity += quantityChange;
+                    if (updatedCards[cardIndex].quantity <= 0) updatedCards.splice(cardIndex, 1);
+                } else if (quantityChange > 0) {
+                    updatedCards.push({ ...card, quantity: 1 });
+                }
+                return { ...deck, cards: updatedCards };
+            }
+            return deck;
+        }));
+    };
+    
+    const handleDeleteClick = (deckId) => setConfirmDelete({ isOpen: true, deckId });
+    const performDelete = () => {
+        if (confirmDelete.deckId) {
+            setDecks(decks.filter(d => d.id !== confirmDelete.deckId));
+            if (activeDeckId === confirmDelete.deckId) setActiveDeckId(null);
+            setConfirmDelete({ isOpen: false, deckId: null });
+        }
+    };
+
+    // Filter Logic
+    const filteredCollection = useMemo(() => {
+        let items = [...collection];
+        Object.entries(filters).forEach(([key, value]) => {
+            if (!value) return;
+            const lowerCaseValue = value.toLowerCase();
+            if (key === 'name') items = items.filter(c => c.name.toLowerCase().includes(lowerCaseValue));
+            if (key === 'type') {
+                if (tcg === 'pokemon') items = items.filter(c => c.types?.includes(value));
+                if (tcg === 'mtg') items = items.filter(c => c.type_line?.toLowerCase().includes(lowerCaseValue));
+            }
+            if (key === 'color' && tcg === 'mtg') {
+                 items = items.filter(c => c.color_identity && c.color_identity.includes(value));
+            }
+        });
+
+        items.sort((a, b) => {
+            if (sort.field === 'name') return a.name.localeCompare(b.name);
+            if (sort.field === 'cmc') return (a.cmc || 0) - (b.cmc || 0);
+            return 0;
+        });
+
+        if (sort.direction === 'desc') items.reverse();
+        
+        // Calculate availability based on active deck
+        const deckCounts = activeDeck?.cards.reduce((acc, c) => ({...acc, [c.id]: c.quantity}), {}) || {};
+        return items.map(c => ({
+            ...c, 
+            available: c.quantity - (deckCounts[c.id] || 0),
+            inDeck: deckCounts[c.id] || 0
+        }));
+
+    }, [collection, filters, sort, tcg, activeDeck]);
+
+    const handleFilterChange = (e) => setFilters(prev => ({ ...prev, [e.target.name]: e.target.value }));
+
+    // AI Analysis Handler
+    const analyzeDeck = async () => {
+        if (!activeDeck || activeDeck.cards.length === 0) {
+            showMessage("Please select a deck with cards to analyze.", 'error');
+            return;
+        }
+        setAnalysis({ isOpen: true, result: '', isAnalyzing: true });
+        try {
+            // Pass full collection for recommendations
+            const result = await getGeminiDeckAnalysis(activeDeck, collection);
+            setAnalysis(prev => ({ ...prev, result }));
+        } catch (error) {
+            setAnalysis(prev => ({ ...prev, result: `Error: ${error.message}` }));
+        } finally {
+            setAnalysis(prev => ({ ...prev, isAnalyzing: false }));
+        }
+    };
+    
+    // Render Helper for AI Text with Tooltips
+    const renderAiText = (htmlString) => {
+        const parts = htmlString.split(/(\[\[.*?\]\])/g);
+        return parts.map((part, i) => {
+            if (part.startsWith('[[') && part.endsWith(']]')) {
+                const name = part.slice(2, -2);
+                return <CardHoverLink key={i} name={name} />;
+            }
+            return <span key={i} dangerouslySetInnerHTML={{ __html: part }} />;
+        });
+    };
+
+    // AI Generator Handler
     const handleAIGenerateDeck = async (format, commander) => {
         showMessage('The AI is building your deck... this may take a moment.', 'info');
         try {
@@ -130,93 +224,39 @@ const DeckBuilder = ({ tcg, config, collection, decks, setDecks, activeDeckId, s
         setCommanderModalOpen(false);
     };
 
-    const updateCardInDeck = (card, quantityChange) => {
-        if (!activeDeck) return;
-        setDecks(decks.map(deck => {
-            if (deck.id === activeDeckId) {
-                const updatedCards = [...deck.cards];
-                const cardIndex = updatedCards.findIndex(c => c.id === card.id);
-                if (cardIndex > -1) {
-                    updatedCards[cardIndex].quantity += quantityChange;
-                    if (updatedCards[cardIndex].quantity <= 0) updatedCards.splice(cardIndex, 1);
-                } else if (quantityChange > 0) {
-                    updatedCards.push({ ...card, quantity: 1 });
-                }
-                return { ...deck, cards: updatedCards };
-            }
-            return deck;
-        }));
-    };
-    
-    const handleDeleteClick = (deckId) => setConfirmDelete({ isOpen: true, deckId });
-    const performDelete = () => {
-        if (confirmDelete.deckId) {
-            setDecks(decks.filter(d => d.id !== confirmDelete.deckId));
-            if (activeDeckId === confirmDelete.deckId) setActiveDeckId(null);
-            setConfirmDelete({ isOpen: false, deckId: null });
-        }
-    };
-
-    const analyzeDeck = async () => {
-        if (!activeDeck || activeDeck.cards.length === 0) {
-            showMessage("Please select a deck with cards to analyze.", 'error');
-            return;
-        }
-        setAnalysis({ isOpen: true, result: '', isAnalyzing: true });
-        try {
-            const result = await getGeminiDeckAnalysis(activeDeck);
-            setAnalysis(prev => ({ ...prev, result }));
-        } catch (error) {
-            console.error("Gemini API Error:", error);
-            setAnalysis(prev => ({ ...prev, result: `An error occurred while analyzing the deck: ${error.message}` }));
-        } finally {
-            setAnalysis(prev => ({ ...prev, isAnalyzing: false }));
-        }
-    };
-
     const legendaryCreatures = useMemo(() => collection.filter(c => c.type_line.includes("Legendary") && c.type_line.includes("Creature")), [collection]);
 
-    const collectionWithAvailability = useMemo(() => {
-        const deckCardCounts = activeDeck?.cards.reduce((acc, card) => {
-            acc[card.id] = card.quantity;
-            return acc;
-        }, {}) || {};
-
-        return collection.map(card => ({
-            ...card,
-            available: card.quantity - (deckCardCounts[card.id] || 0),
-            inDeck: deckCardCounts[card.id] || 0
-        }));
-    }, [collection, activeDeck]);
-
     return (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <div className="lg:col-span-1 space-y-6">
-                 <div className="bg-gray-800/50 p-4 rounded-2xl border border-gray-700 space-y-4 backdrop-blur-sm">
-                    <h3 className="font-bold text-lg text-indigo-300">Deck Management</h3>
-                    <div className="flex gap-2">
-                        <select value={activeDeckId || ''} onChange={e => setActiveDeckId(e.target.value)} className="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg text-white">
-                            <option value="">-- Select a Deck --</option>
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-[85vh]">
+            {/* Left Panel: Deck Stats & List */}
+            <div className="lg:col-span-1 space-y-4 flex flex-col h-full">
+                 <div className="bg-gray-800/50 p-4 rounded-xl border border-gray-700">
+                    <div className="flex gap-2 mb-2">
+                        <select value={activeDeckId || ''} onChange={e => setActiveDeckId(e.target.value)} className="w-full p-2 bg-gray-700 border border-gray-600 rounded text-white">
+                            <option value="">-- Select Deck --</option>
                             {decks.map(deck => <option key={deck.id} value={deck.id}>{deck.name} ({deck.format})</option>)}
                         </select>
-                        <button onClick={() => setNewDeckModalOpen(true)} className={`px-4 py-2 text-white font-semibold rounded-lg transition-colors ${config.theme.button}`}><PlusCircle size={20}/></button>
+                        <button onClick={() => setNewDeckModalOpen(true)} className={`px-3 py-2 text-white rounded ${config.theme.button}`}><PlusCircle size={20}/></button>
                     </div>
-                    <button onClick={() => setAIGenerateModalOpen(true)} className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-500 transition-colors text-sm">
-                        <Wand2 size={16} /> Generate Deck with AI
-                    </button>
+                    {tcg === 'mtg' && (
+                        <button onClick={() => setAIGenerateModalOpen(true)} className="w-full mb-2 flex items-center justify-center gap-2 px-4 py-2 bg-teal-600 text-white rounded hover:bg-teal-500 transition-colors text-sm">
+                            <Wand2 size={16} /> Generate Deck with AI
+                        </button>
+                    )}
                      {activeDeck && (
-                        <div className="flex justify-between items-center">
-                            <button onClick={analyzeDeck} className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-500 transition-colors text-sm"><BrainCircuit size={16} /> AI Analysis</button>
-                            {activeDeck.format === 'commander' &&
-                                <button onClick={() => setCommanderModalOpen(true)} className="flex items-center gap-2 px-4 py-2 bg-yellow-600 text-white rounded-lg hover:bg-yellow-500 transition-colors text-sm"><Crown size={16} /> Set Commander</button>
+                        <div className="flex gap-2">
+                             <button onClick={analyzeDeck} className="flex-1 flex items-center justify-center gap-1 px-2 py-2 bg-purple-600 text-white rounded hover:bg-purple-500 text-xs"><BrainCircuit size={14} /> AI Analysis</button>
+                             {activeDeck.format === 'commander' &&
+                                <button onClick={() => setCommanderModalOpen(true)} className="flex items-center gap-2 px-4 py-2 bg-yellow-600 text-white rounded hover:bg-yellow-500 text-xs"><Crown size={14} /> Set Commander</button>
                             }
-                            <button onClick={() => handleDeleteClick(activeDeck.id)} className="p-2 text-red-400 hover:text-red-300"><Trash2 size={18}/></button>
+                             <button onClick={() => setConfirmDelete({ isOpen: true, deckId: activeDeck.id })} className="p-2 text-red-400 hover:text-red-300"><Trash2 size={18}/></button>
                         </div>
                     )}
                  </div>
+
                  {activeDeck && (
-                    <div className="bg-gray-800/50 p-4 rounded-2xl border border-gray-700 backdrop-blur-sm">
-                        <h3 className="font-bold text-lg text-indigo-300 mb-3">{activeDeck.name} ({activeDeck?.cards.reduce((acc, c) => acc + c.quantity, 0) || 0} cards)</h3>
+                    <div className="bg-gray-800/50 p-4 rounded-xl border border-gray-700 flex-1 overflow-hidden flex flex-col">
+                        <h3 className="font-bold text-indigo-300 mb-2">{activeDeck.name} ({activeDeck?.cards.reduce((acc, c) => acc + c.quantity, 0)} cards)</h3>
                         {activeDeck.commander && (
                              <div className="flex items-center gap-3 mb-3 p-2 bg-yellow-900/50 rounded-lg">
                                  <Crown size={20} className="text-yellow-400"/>
@@ -226,31 +266,48 @@ const DeckBuilder = ({ tcg, config, collection, decks, setDecks, activeDeckId, s
                                  </div>
                              </div>
                         )}
-                         <div className="max-h-60 overflow-y-auto space-y-2 pr-2">
+                        <div className="overflow-y-auto flex-1 pr-2 space-y-1">
                             {activeDeck.cards.sort((a,b) => a.name.localeCompare(b.name)).map(card => (
-                                <div key={card.id} className="flex justify-between items-center bg-gray-700/50 p-2 rounded-md">
-                                    <span className="text-white truncate text-sm cursor-pointer hover:text-indigo-300" onClick={() => setSelectedCard(card)}>
-                                        {card.quantity}x {card.name}
-                                    </span>
-                                    <div className="flex items-center gap-2">
-                                         <button onClick={() => updateCardInDeck(card, -1)} className="text-red-500 hover:text-red-400"><MinusCircle size={16}/></button>
-                                         <button onClick={() => updateCardInDeck(card, 1)} className="text-green-500 hover:text-green-400"><PlusCircle size={16}/></button>
+                                <div key={card.id} className="flex justify-between items-center bg-gray-700/30 p-2 rounded">
+                                    <span className="text-white text-sm cursor-pointer hover:text-indigo-300" onClick={() => setSelectedCard(card)}>{card.quantity}x {card.name}</span>
+                                    <div className="flex gap-1">
+                                         <button onClick={() => updateCardInDeck(card, -1)} className="text-red-400"><MinusCircle size={16}/></button>
+                                         <button onClick={() => updateCardInDeck(card, 1)} className="text-green-400"><PlusCircle size={16}/></button>
                                     </div>
                                 </div>
                             ))}
-                         </div>
-                         <div className="mt-4">
-                            <DeckValidation deck={activeDeck} tcg={tcg}/>
-                         </div>
+                        </div>
+                        <div className="mt-2 pt-2 border-t border-gray-700">
+                             <DeckValidation deck={activeDeck} tcg={tcg}/>
+                        </div>
                     </div>
                  )}
             </div>
 
-            <div className="lg:col-span-2 bg-gray-800/50 p-4 rounded-2xl border border-gray-700 backdrop-blur-sm">
-                <h3 className="font-bold text-lg text-indigo-300 mb-4">Add Cards from Collection</h3>
+            {/* Right Panel: Collection & Filters */}
+            <div className="lg:col-span-2 bg-gray-800/50 p-4 rounded-xl border border-gray-700 h-full flex flex-col">
+                {/* Filters Bar */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-4">
+                    <input type="text" name="name" placeholder="Search..." onChange={handleFilterChange} className="p-2 bg-gray-700 border border-gray-600 rounded text-white text-sm" />
+                    <input type="text" name="type" placeholder="Type..." onChange={handleFilterChange} className="p-2 bg-gray-700 border border-gray-600 rounded text-white text-sm" />
+                    {tcg === 'mtg' && (
+                        <select name="color" onChange={handleFilterChange} className="p-2 bg-gray-700 border border-gray-600 rounded text-white text-sm">
+                            <option value="">All Colors</option>
+                            <option value="W">White</option><option value="U">Blue</option><option value="B">Black</option><option value="R">Red</option><option value="G">Green</option>
+                        </select>
+                    )}
+                    <div className="flex gap-1">
+                        <select value={sort.field} onChange={e => setSort(s => ({ ...s, field: e.target.value }))} className="flex-1 p-2 bg-gray-700 border border-gray-600 rounded text-white text-sm">
+                            <option value="name">Name</option>
+                            <option value="cmc">Cost</option>
+                        </select>
+                         <button onClick={() => setSort(s => ({ ...s, direction: s.direction === 'asc' ? 'desc' : 'asc' }))} className="p-2 bg-gray-700 rounded hover:bg-gray-600"><ChevronsUpDown size={16} /></button>
+                    </div>
+                </div>
+
                 {activeDeck ? (
-                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-4 xl:grid-cols-5 gap-4 max-h-[70vh] overflow-y-auto pr-2">
-                        {collectionWithAvailability.map(card => (
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 overflow-y-auto pr-2">
+                        {filteredCollection.map(card => (
                             <CardDisplayWithControls 
                                 key={card.id} 
                                 card={card} 
@@ -264,12 +321,22 @@ const DeckBuilder = ({ tcg, config, collection, decks, setDecks, activeDeckId, s
                             />
                         ))}
                     </div>
-                ) : <div className="text-center py-20"><p className="text-gray-400">Please select or create a deck to start adding cards.</p></div>}
+                ) : <div className="flex items-center justify-center h-full text-gray-500">Select a deck to begin.</div>}
             </div>
 
-            {selectedCard && <CardDetailModal tcg={tcg} card={selectedCard} onClose={() => setSelectedCard(null)} />}
+            {/* Modals */}
+            <Modal isOpen={analysis.isOpen} onClose={() => setAnalysis({ ...analysis, isOpen: false })} title={`AI Analysis`}>
+                {analysis.isAnalyzing ? <Spinner text="Consulting the oracle..." /> : (
+                    <div className="prose prose-invert prose-sm max-w-none text-gray-300 space-y-4">
+                         {renderAiText(analysis.result)}
+                    </div>
+                )}
+            </Modal>
+            
             <NewDeckModal isOpen={newDeckModalOpen} onClose={() => setNewDeckModalOpen(false)} onCreate={handleCreateDeck} formats={config.deckFormats} />
+            
             <AIGenerateDeckModal isOpen={aiGenerateModalOpen} onClose={() => setAIGenerateModalOpen(false)} onGenerate={handleAIGenerateDeck} legendaryCreatures={legendaryCreatures} formats={config.deckFormats} />
+            
             <Modal isOpen={commanderModalOpen} onClose={() => setCommanderModalOpen(false)} title="Select a Commander">
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-4 max-h-[60vh] overflow-y-auto">
                     {legendaryCreatures.map(card => (
@@ -279,55 +346,34 @@ const DeckBuilder = ({ tcg, config, collection, decks, setDecks, activeDeckId, s
                     ))}
                 </div>
             </Modal>
-            <Modal isOpen={analysis.isOpen} onClose={() => setAnalysis({ isOpen: false, result: '', isAnalyzing: false })} title={`AI Analysis for ${activeDeck?.name}`}>
-                {analysis.isAnalyzing ? <Spinner text="The AI is analyzing your deck..." /> : <div className="prose prose-invert prose-p:text-gray-300" dangerouslySetInnerHTML={{ __html: analysis.result }}></div>}
+            
+            <Modal isOpen={confirmDelete.isOpen} onClose={() => setConfirmDelete({ isOpen: false, deckId: null })} title="Confirm Delete">
+                 <div className="flex justify-end gap-2 mt-4">
+                    <button onClick={() => setConfirmDelete({ isOpen: false, deckId: null })} className="px-4 py-2 bg-gray-600 rounded text-white">Cancel</button>
+                    <button onClick={performDelete} className="px-4 py-2 bg-red-600 rounded text-white">Delete</button>
+                 </div>
             </Modal>
-            <Modal isOpen={confirmDelete.isOpen} onClose={() => setConfirmDelete({ isOpen: false, deckId: null })} title="Confirm Deletion">
-                <p className="text-gray-300 mb-6">Are you sure you want to permanently delete this deck?</p>
-                <div className="flex justify-end gap-4">
-                    <button onClick={() => setConfirmDelete({ isOpen: false, deckId: null })} className="px-6 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-500">Cancel</button>
-                    <button onClick={performDelete} className="px-6 py-2 bg-red-600 text-white rounded-lg hover:bg-red-500">Delete</button>
-                </div>
-            </Modal>
+            
+            {selectedCard && <CardDetailModal tcg={tcg} card={selectedCard} onClose={() => setSelectedCard(null)} />}
+
         </div>
     );
 };
 
+// --- Helper Modals ---
+
 const NewDeckModal = ({ isOpen, onClose, onCreate, formats }) => {
     const [name, setName] = useState('');
     const [format, setFormat] = useState(formats[0]);
-
-    useEffect(() => {
-        setFormat(formats[0]);
-    }, [formats]);
-
-    const handleSubmit = (e) => {
-        e.preventDefault();
-        if(name.trim()) {
-            onCreate(name, format);
-            setName('');
-            setFormat(formats[0]);
-        }
-    };
-
+    useEffect(() => setFormat(formats[0]), [formats]);
     return (
-        <Modal isOpen={isOpen} onClose={onClose} title="Create New Deck">
-            <form onSubmit={handleSubmit} className="space-y-4">
-                <div>
-                    <label htmlFor="deck-name" className="block text-sm font-medium text-gray-300 mb-1">Deck Name</label>
-                    <input type="text" id="deck-name" value={name} onChange={e => setName(e.target.value)} className="w-full p-2 bg-gray-700 border border-gray-600 rounded-lg text-white" required />
+        <Modal isOpen={isOpen} onClose={onClose} title="Create Deck">
+            <form onSubmit={(e) => { e.preventDefault(); if(name) onCreate(name, format); }}>
+                <input value={name} onChange={e => setName(e.target.value)} className="w-full p-2 bg-gray-700 rounded mb-4 text-white" placeholder="Deck Name" required />
+                <div className="flex gap-2">
+                    {formats.map(f => <button key={f} type="button" onClick={() => setFormat(f)} className={`flex-1 p-2 rounded border ${format === f ? 'border-indigo-500 bg-indigo-900' : 'border-gray-600'}`}>{f}</button>)}
                 </div>
-                <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-1">Format</label>
-                    <div className="flex gap-4">
-                        {formats.map(f => (
-                            <button key={f} type="button" onClick={() => setFormat(f)} className={`flex-1 p-3 rounded-lg border-2 capitalize ${format === f ? 'border-indigo-500 bg-indigo-900/50' : 'border-gray-600 bg-gray-700'}`}>{f}</button>
-                        ))}
-                    </div>
-                </div>
-                <div className="flex justify-end pt-4">
-                    <button type="submit" className="px-6 py-2 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-500">Create Deck</button>
-                </div>
+                <button type="submit" className="w-full mt-4 p-2 bg-indigo-600 rounded text-white">Create</button>
             </form>
         </Modal>
     );
