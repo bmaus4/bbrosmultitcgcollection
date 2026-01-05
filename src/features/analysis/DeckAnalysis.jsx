@@ -2,7 +2,8 @@ import React, { useMemo, useState } from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
 import { CardHoverLink, Modal, CardDisplay } from '../../components/Shared';
 
-const COLORS = ['#FFFFFF', '#4299E1', '#1A202C', '#E53E3E', '#38A169', '#718096', '#D6BCFA', '#F6E05E'];
+// Updated Colors: Sorcery is now Orange (F6AD55) instead of gray, Artifact is Silver (CBD5E0)
+const COLORS = ['#FFFFFF', '#4299E1', '#1A202C', '#E53E3E', '#38A169', '#CBD5E0', '#D6BCFA', '#F6AD55'];
 
 const DeckAnalysis = ({ deck }) => {
     const [selectedCmc, setSelectedCmc] = useState(null);
@@ -29,7 +30,7 @@ const DeckAnalysis = ({ deck }) => {
             ? (nonLandCards.reduce((acc, c) => acc + (c.cmc || 0), 0) / nonLandCards.length).toFixed(2)
             : '0.00';
 
-        // Card Types (Simplified)
+        // Card Types
         const simplifiedTypes = { Creature: 0, Instant: 0, Sorcery: 0, Enchantment: 0, Artifact: 0, Planeswalker: 0, Land: 0 };
         allCards.forEach(card => {
             const t = card.type_line.toLowerCase();
@@ -44,6 +45,21 @@ const DeckAnalysis = ({ deck }) => {
         const typeData = Object.entries(simplifiedTypes)
             .filter(([, val]) => val > 0)
             .map(([name, value]) => ({ name, value }));
+
+        // Creature Subtypes Bar Chart
+        const creatureSubtypes = {};
+        allCards.filter(c => c.type_line.includes('Creature')).forEach(c => {
+             // Split by em dash or dash
+             const parts = c.type_line.split(/[-—]/); 
+             if (parts.length > 1) {
+                 const subtypes = parts[1].trim().split(' ');
+                 subtypes.forEach(s => creatureSubtypes[s] = (creatureSubtypes[s] || 0) + 1);
+             }
+        });
+        const creatureSubtypeData = Object.entries(creatureSubtypes)
+            .map(([name, value]) => ({ name, value }))
+            .sort((a,b) => b.value - a.value)
+            .slice(0, 10); // Top 10
         
         // Color Distribution Helper
         const getColorData = (cards) => {
@@ -61,17 +77,16 @@ const DeckAnalysis = ({ deck }) => {
         const landColorData = getColorData(lands);
         const spellColorData = getColorData(nonLandCards);
 
-        return { manaCurve, avgCmc, typeData, landColorData, spellColorData };
+        return { manaCurve, avgCmc, typeData, landColorData, spellColorData, creatureSubtypeData };
     }, [deck]);
 
     if (!analysisData) return <div className="text-center py-8 text-gray-400">No data to analyze.</div>;
 
-    const { manaCurve, avgCmc, typeData, landColorData, spellColorData } = analysisData;
+    const { manaCurve, avgCmc, typeData, landColorData, spellColorData, creatureSubtypeData } = analysisData;
 
     // Helper to render AI Text with Hover Links
     const renderAiText = (htmlString) => {
         if (!htmlString) return null;
-        // Split by [[Card Name]] regex
         const parts = htmlString.split(/(\[\[.*?\]\])/g);
         return parts.map((part, i) => {
             if (part.startsWith('[[') && part.endsWith(']]')) {
@@ -86,46 +101,33 @@ const DeckAnalysis = ({ deck }) => {
         <div className="space-y-8">
             <h2 className="text-3xl font-bold text-indigo-300">Analysis for {deck.name}</h2>
             
-            {/* Added: Display AI Analysis Results if passed down or stored elsewhere, 
-                currently DeckAnalysis receives 'deck' but the AI result is usually in a parent state.
-                If you want to show analysis text here, it needs to be passed in props.
-                For now, I'm ensuring renderAiText is defined but not causing a lint error if unused
-                by not exporting it or using it if no text is present. 
-                However, to strictly fix "assigned but never used": */}
-            {deck.aiAnalysisResult && (
-                <div className="bg-gray-800/50 p-6 rounded-2xl border border-gray-700 prose prose-invert max-w-none">
-                    <h3>AI Insights</h3>
-                    <div>{renderAiText(deck.aiAnalysisResult)}</div>
-                </div>
-            )}
-            
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                {/* Mana Curve */}
-                <div className="bg-gray-800/50 p-6 rounded-2xl border border-gray-700">
-                    <h3 className="text-xl font-semibold mb-4">Mana Curve (Avg: {avgCmc})</h3>
-                    <p className="text-xs text-gray-400 mb-2">Click a bar to view cards</p>
-                    <ResponsiveContainer width="100%" height={300}>
-                        <BarChart data={manaCurve} margin={{ top: 5, right: 20, left: -10, bottom: 5 }}
-                            onClick={(data) => {
-                                if (data && data.activePayload && data.activePayload.length > 0) {
-                                    setSelectedCmc(data.activePayload[0].payload);
-                                }
-                            }}
-                        >
-                            <XAxis dataKey="cmc" stroke="#9CA3AF" />
-                            <YAxis allowDecimals={false} stroke="#9CA3AF" />
-                            <Tooltip cursor={{fill: '#4A5568'}} contentStyle={{ backgroundColor: '#2D3748', border: '1px solid #4A5568' }} />
-                            <Bar dataKey="count" fill="#818CF8" style={{ cursor: 'pointer' }} />
-                        </BarChart>
-                    </ResponsiveContainer>
-                </div>
+            {/* Mana Curve */}
+            <div className="bg-gray-800/50 p-6 rounded-2xl border border-gray-700">
+                <h3 className="text-xl font-semibold mb-4">Mana Curve (Avg: {avgCmc})</h3>
+                <p className="text-xs text-gray-400 mb-2">Click a bar to view cards</p>
+                <ResponsiveContainer width="100%" height={300}>
+                    <BarChart data={manaCurve} margin={{ top: 5, right: 20, left: -10, bottom: 5 }}
+                        onClick={(data) => {
+                            if (data && data.activePayload && data.activePayload.length > 0) {
+                                setSelectedCmc(data.activePayload[0].payload);
+                            }
+                        }}
+                    >
+                        <XAxis dataKey="cmc" stroke="#9CA3AF" />
+                        <YAxis allowDecimals={false} stroke="#9CA3AF" />
+                        <Tooltip cursor={{fill: '#4A5568'}} contentStyle={{ backgroundColor: '#2D3748', border: '1px solid #4A5568' }} />
+                        <Bar dataKey="count" fill="#818CF8" style={{ cursor: 'pointer' }} />
+                    </BarChart>
+                </ResponsiveContainer>
+            </div>
 
-                {/* Simplified Card Types */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                {/* Card Types Pie */}
                 <div className="bg-gray-800/50 p-6 rounded-2xl border border-gray-700">
                     <h3 className="text-xl font-semibold mb-4">Card Types</h3>
                      <ResponsiveContainer width="100%" height={300}>
                         <PieChart>
-                            <Pie data={typeData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={100} label>
+                            <Pie data={typeData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label>
                                 {typeData.map((entry, index) => <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />)}
                             </Pie>
                             <Tooltip contentStyle={{ backgroundColor: '#2D3748', border: '1px solid #4A5568' }} />
@@ -133,13 +135,28 @@ const DeckAnalysis = ({ deck }) => {
                         </PieChart>
                     </ResponsiveContainer>
                 </div>
-                
-                {/* Non-Land Colors */}
+
+                {/* Creature Subtypes Bar */}
+                <div className="bg-gray-800/50 p-6 rounded-2xl border border-gray-700">
+                    <h3 className="text-xl font-semibold mb-4">Top Creature Subtypes</h3>
+                     <ResponsiveContainer width="100%" height={300}>
+                        <BarChart data={creatureSubtypeData} layout="vertical" margin={{ top: 5, right: 20, left: 40, bottom: 5 }}>
+                            <XAxis type="number" stroke="#9CA3AF" hide />
+                            <YAxis type="category" dataKey="name" stroke="#9CA3AF" width={100} />
+                            <Tooltip contentStyle={{ backgroundColor: '#2D3748', border: '1px solid #4A5568' }} />
+                            <Bar dataKey="value" fill="#4FD1C5" />
+                        </BarChart>
+                    </ResponsiveContainer>
+                </div>
+            </div>
+            
+            {/* Color Distribution Split */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                 <div className="bg-gray-800/50 p-6 rounded-2xl border border-gray-700">
                     <h3 className="text-xl font-semibold mb-4">Spell Color Identity</h3>
                      <ResponsiveContainer width="100%" height={300}>
                         <PieChart>
-                            <Pie data={spellColorData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={100} label>
+                            <Pie data={spellColorData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label>
                                 {spellColorData.map((entry, i) => <Cell key={i} fill={getPieColor(entry.name)} />)}
                             </Pie>
                             <Tooltip />
@@ -148,12 +165,11 @@ const DeckAnalysis = ({ deck }) => {
                     </ResponsiveContainer>
                 </div>
 
-                 {/* Land Colors */}
                  <div className="bg-gray-800/50 p-6 rounded-2xl border border-gray-700">
                     <h3 className="text-xl font-semibold mb-4">Land Color Identity</h3>
                      <ResponsiveContainer width="100%" height={300}>
                         <PieChart>
-                            <Pie data={landColorData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={100} label>
+                            <Pie data={landColorData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label>
                                 {landColorData.map((entry, i) => <Cell key={i} fill={getPieColor(entry.name)} />)}
                             </Pie>
                             <Tooltip />
@@ -165,7 +181,7 @@ const DeckAnalysis = ({ deck }) => {
 
             {/* Modal for Mana Curve Interaction */}
             <Modal isOpen={!!selectedCmc} onClose={() => setSelectedCmc(null)} title={`Cards with Mana Value: ${selectedCmc?.cmc}`}>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 max-h-[70vh] overflow-y-auto">
                     {selectedCmc?.cards.map(card => (
                         <div key={card.id}><CardDisplay card={card} tcg="mtg" /></div>
                     ))}
