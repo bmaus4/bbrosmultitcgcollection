@@ -84,19 +84,6 @@ const DeckAnalysis = ({ deck }) => {
 
     const { manaCurve, avgCmc, typeData, landColorData, spellColorData, creatureSubtypeData } = analysisData;
 
-    // Helper to render AI Text with Hover Links
-    const renderAiText = (htmlString) => {
-        if (!htmlString) return null;
-        const parts = htmlString.split(/(\[\[.*?\]\])/g);
-        return parts.map((part, i) => {
-            if (part.startsWith('[[') && part.endsWith(']]')) {
-                const name = part.slice(2, -2);
-                return <CardHoverLink key={i} name={name} />;
-            }
-            return <span key={i} dangerouslySetInnerHTML={{ __html: part }} />;
-        });
-    };
-
     return (
         <div className="space-y-8">
             <h2 className="text-3xl font-bold text-indigo-300">Analysis for {deck.name}</h2>
