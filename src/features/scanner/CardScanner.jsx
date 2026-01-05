@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { RefreshCw, Video } from 'lucide-react';
+import { RefreshCw } from 'lucide-react';
 import Tesseract from 'tesseract.js';
 import Fuse from 'fuse.js';
 
-// Relaxed constraints for better mobile hit rate
-const REQUIRED_CONSECUTIVE_MATCHES = 2; 
-const MATCH_THRESHOLD = 0.4; // 0.0 is exact match, 0.4 allows for some OCR errors
-const SCAN_COOLDOWN = 3; 
+// RELAXED CONSTRAINTS FOR BETTER HIT RATE
+const REQUIRED_CONSECUTIVE_MATCHES = 1; // Instant feedback
+const MATCH_THRESHOLD = 0.3; // Looser matching (0.0 is perfect, 1.0 is awful)
+const SCAN_COOLDOWN = 2; 
 
 const CardScanner = ({ onCardScanned, showMessage }) => {
     const [isScanning, setIsScanning] = useState(false);
@@ -23,21 +23,25 @@ const CardScanner = ({ onCardScanned, showMessage }) => {
     const canvasRef = useRef(null);
     const streamRef = useRef(null);
 
+    // 1. Load Card Catalog
     useEffect(() => {
         const fetchCardNames = async () => {
             try {
                 const response = await fetch("https://api.scryfall.com/catalog/card-names");
                 const data = await response.json();
                 setAllCardNames(data.data);
+                // Initialize Fuse with threshold matching the constant
                 setFuse(new Fuse(data.data, { threshold: 0.4 })); 
                 setStatus('Ready to Scan');
             } catch (error) {
+                console.error(error);
                 showMessage("Failed to load card database.", "error");
             }
         };
         fetchCardNames();
     }, [showMessage]);
 
+    // 2. Initialize Camera Logic
     const startCamera = useCallback(async (deviceId = null) => {
         if (streamRef.current) {
             streamRef.current.getTracks().forEach(track => track.stop());
@@ -47,7 +51,7 @@ const CardScanner = ({ onCardScanned, showMessage }) => {
             const constraints = {
                 video: {
                     deviceId: deviceId ? { exact: deviceId } : undefined,
-                    facingMode: deviceId ? undefined : 'environment',
+                    facingMode: deviceId ? undefined : 'environment', // Prefer back camera on mobile
                     width: { ideal: 1280 },
                     height: { ideal: 720 }
                 }
@@ -65,15 +69,17 @@ const CardScanner = ({ onCardScanned, showMessage }) => {
                 };
             }
 
+            // Get list of cameras for the switcher button
             const devices = await navigator.mediaDevices.enumerateDevices();
             setCameras(devices.filter(d => d.kind === 'videoinput'));
 
         } catch (err) {
             console.error("Camera Error:", err);
-            showMessage("Camera access denied.", "error");
+            showMessage("Camera access denied. Please check permissions.", "error");
         }
     }, [showMessage]);
 
+    // Handle initial camera start once catalog is loaded
     useEffect(() => {
         if (allCardNames.length > 0 && !isScanning) {
             startCamera();
@@ -86,6 +92,7 @@ const CardScanner = ({ onCardScanned, showMessage }) => {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [allCardNames]); 
 
+    // Success Handler
     const handleScanSuccess = useCallback((cardName) => {
         setStatus(`SUCCESS: ${cardName}`);
         lastScanTime.current = Date.now() / 1000;
@@ -109,11 +116,13 @@ const CardScanner = ({ onCardScanned, showMessage }) => {
         ctx.putImageData(imageData, 0, 0);
     };
 
+    // 3. Scanning Loop
     useEffect(() => {
         let interval;
         if (isScanning && fuse) {
             interval = setInterval(async () => {
                 const now = Date.now() / 1000;
+                // Check Cooldown
                 if (now - lastScanTime.current < SCAN_COOLDOWN) {
                     setStatus("Cooldown...");
                     return;
@@ -124,9 +133,10 @@ const CardScanner = ({ onCardScanned, showMessage }) => {
                     const canvas = canvasRef.current;
                     const ctx = canvas.getContext('2d');
 
-                    if (video.videoWidth === 0) return;
+                    if (video.videoWidth === 0 || video.videoHeight === 0) return;
 
-                    // Scan the top 20% of the video where the title usually is
+                    // Define Region of Interest (The green box area)
+                    // We scan the top-center portion where card titles usually are
                     const roiX = video.videoWidth * 0.15;
                     const roiY = video.videoHeight * 0.15; 
                     const roiW = video.videoWidth * 0.7;
@@ -139,6 +149,7 @@ const CardScanner = ({ onCardScanned, showMessage }) => {
                     // Apply contrast filter to help OCR
                     preprocessImage(ctx, roiW, roiH);
 
+                    // Perform OCR
                     const { data: { text } } = await Tesseract.recognize(canvas, 'eng');
                     // Clean text: keep only letters and spaces
                     const cleaned = text.replace(/[^a-zA-Z\s]/g, '').trim();
@@ -147,10 +158,12 @@ const CardScanner = ({ onCardScanned, showMessage }) => {
                         setDebugText(cleaned.substring(0, 20)); // Show user what we see
                         const results = fuse.search(cleaned);
                         
+                        // Check if we found a match within our threshold
                         if (results.length > 0 && results[0].score < MATCH_THRESHOLD) { 
                             const match = results[0].item;
                             recentReads.current.push(match);
                             
+                            // Check for consecutive matches (validation)
                             if (recentReads.current.length >= REQUIRED_CONSECUTIVE_MATCHES) {
                                 // Check if recent reads mostly agree
                                 const counts = {};
@@ -179,6 +192,7 @@ const CardScanner = ({ onCardScanned, showMessage }) => {
         return () => clearInterval(interval);
     }, [isScanning, fuse, handleScanSuccess]);
 
+    // Camera Switcher
     const switchCamera = () => {
         if (cameras.length > 1) {
             const currentIndex = cameras.findIndex(c => c.deviceId === activeCameraId);
@@ -191,36 +205,54 @@ const CardScanner = ({ onCardScanned, showMessage }) => {
 
     return (
         <div className="flex flex-col items-center w-full h-full bg-black rounded-xl overflow-hidden relative">
+            {/* Camera View */}
             <div className="relative w-full aspect-video bg-gray-900">
-                <video ref={videoRef} className="w-full h-full object-cover" playsInline muted />
+                <video 
+                    ref={videoRef} 
+                    className="w-full h-full object-cover" 
+                    playsInline 
+                    muted 
+                />
                 
+                {/* Overlay UI */}
                 <div className="absolute inset-0 pointer-events-none flex flex-col items-center">
-                    <div className="w-full p-2 bg-black/70 text-white text-center text-sm font-mono backdrop-blur-md border-b border-gray-700">
+                    {/* Top Status Bar */}
+                    <div className="w-full p-2 bg-black/50 text-white text-center text-sm font-mono backdrop-blur-sm transition-all">
                         {status}
                     </div>
 
-                    {/* Guidelines */}
+                    {/* Guidelines - The Green Box */}
                     <div className={`mt-12 w-[70%] h-[20%] border-4 rounded-lg shadow-[0_0_30px_rgba(0,0,0,0.5)] relative transition-colors ${status.includes('SUCCESS') ? 'border-green-400 bg-green-500/20' : 'border-white/40'}`}>
                         <div className="absolute -top-6 left-1/2 -translate-x-1/2 text-white/90 text-xs font-bold bg-black/60 px-3 py-1 rounded-full uppercase tracking-wider">
                             Card Title
                         </div>
                     </div>
 
+                    {/* Debug Text - What the Scanner Sees */}
                     <div className="mt-auto mb-4 bg-black/60 px-4 py-2 rounded-full text-gray-300 text-xs font-mono">
                          Saw: <span className="text-white font-bold">{debugText || "..."}</span>
                     </div>
                 </div>
             </div>
 
+            {/* Controls */}
             <div className="flex gap-4 mt-4 mb-2">
                 {cameras.length > 1 && (
-                    <button onClick={switchCamera} className="p-3 bg-gray-700 rounded-full text-white hover:bg-gray-600 transition-colors">
+                    <button onClick={switchCamera} className="p-3 bg-gray-700 rounded-full text-white hover:bg-gray-600 transition-colors" title="Switch Camera">
                         <RefreshCw size={24} />
                     </button>
                 )}
             </div>
-            
+
+            {/* Hidden Canvas for Processing */}
             <canvas ref={canvasRef} className="hidden" />
+            
+            {/* Loading Indicator */}
+            {allCardNames.length === 0 && (
+                <div className="absolute inset-0 bg-black/80 flex items-center justify-center text-yellow-400 font-mono z-50">
+                    Loading card catalog...
+                </div>
+            )}
         </div>
     );
 };
