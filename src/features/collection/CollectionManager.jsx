@@ -185,7 +185,7 @@ const CollectionManager = ({ tcg, config, collection, onDeleteCard, onAddCard, s
         setIsSearching(false);
         setManualCardName('');
     };
-
+    
     const handleVersionSelect = (card) => {
         setSearchResults([]);
         if (tcg === 'pokemon') {
@@ -297,13 +297,12 @@ const CollectionManager = ({ tcg, config, collection, onDeleteCard, onAddCard, s
             {pokemonCardToCondition && <PokemonConditionModal card={pokemonCardToCondition} onClose={() => setPokemonCardToCondition(null)} onAdd={(card) => { onAddCard(card); setPokemonCardToCondition(null); }} />}
             {selectedCard && <CardDetailModal tcg={tcg} card={selectedCard} onClose={() => setSelectedCard(null)} />}
             
-            {/* Modal for Web Scanner */}
             <Modal isOpen={isScannerOpen} onClose={() => setIsScannerOpen(false)} title="MTG Card Scanner">
                 <CardScanner 
                     showMessage={showMessage}
                     onCardScanned={async (cardName) => {
-                        await handleSearch(cardName);
-                        setIsScannerOpen(false);
+                        setIsScannerOpen(false); // Close modal first
+                        await handleSearch(cardName); // Then search/add
                     }}
                 />
             </Modal>
