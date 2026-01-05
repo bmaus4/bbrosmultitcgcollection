@@ -1,16 +1,17 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { RefreshCw } from 'lucide-react';
+import { RefreshCw, Video } from 'lucide-react';
 import Tesseract from 'tesseract.js';
 import Fuse from 'fuse.js';
 
-// RELAXED CONSTRAINTS FOR BETTER HIT RATE
-const REQUIRED_CONSECUTIVE_MATCHES = 1; // Instant feedback
-const MATCH_THRESHOLD = 0.3; // Looser matching (0.0 is perfect, 1.0 is awful)
-const SCAN_COOLDOWN = 2; 
+// Relaxed constraints for better mobile hit rate
+const REQUIRED_CONSECUTIVE_MATCHES = 2; 
+const MATCH_THRESHOLD = 0.4; // 0.0 is exact match, 0.4 allows for some OCR errors
+const SCAN_COOLDOWN = 3; 
 
 const CardScanner = ({ onCardScanned, showMessage }) => {
     const [isScanning, setIsScanning] = useState(false);
     const [status, setStatus] = useState('Initializing...');
+    const [debugText, setDebugText] = useState(''); // Visual feedback of what it sees
     const [allCardNames, setAllCardNames] = useState([]);
     const [fuse, setFuse] = useState(null);
     const [cameras, setCameras] = useState([]);
@@ -22,25 +23,21 @@ const CardScanner = ({ onCardScanned, showMessage }) => {
     const canvasRef = useRef(null);
     const streamRef = useRef(null);
 
-    // 1. Load Card Catalog
     useEffect(() => {
         const fetchCardNames = async () => {
             try {
                 const response = await fetch("https://api.scryfall.com/catalog/card-names");
                 const data = await response.json();
                 setAllCardNames(data.data);
-                // Initialize Fuse with threshold matching the constant
                 setFuse(new Fuse(data.data, { threshold: 0.4 })); 
                 setStatus('Ready to Scan');
             } catch (error) {
-                console.error(error);
                 showMessage("Failed to load card database.", "error");
             }
         };
         fetchCardNames();
     }, [showMessage]);
 
-    // 2. Initialize Camera Logic
     const startCamera = useCallback(async (deviceId = null) => {
         if (streamRef.current) {
             streamRef.current.getTracks().forEach(track => track.stop());
@@ -50,7 +47,7 @@ const CardScanner = ({ onCardScanned, showMessage }) => {
             const constraints = {
                 video: {
                     deviceId: deviceId ? { exact: deviceId } : undefined,
-                    facingMode: deviceId ? undefined : 'environment', // Prefer back camera on mobile
+                    facingMode: deviceId ? undefined : 'environment',
                     width: { ideal: 1280 },
                     height: { ideal: 720 }
                 }
@@ -64,21 +61,19 @@ const CardScanner = ({ onCardScanned, showMessage }) => {
                 videoRef.current.onloadedmetadata = () => {
                     videoRef.current.play().catch(e => console.error("Play error:", e));
                     setIsScanning(true);
-                    setStatus('Align text in the box');
+                    setStatus('Align title in box');
                 };
             }
 
-            // Get list of cameras for the switcher button
             const devices = await navigator.mediaDevices.enumerateDevices();
             setCameras(devices.filter(d => d.kind === 'videoinput'));
 
         } catch (err) {
             console.error("Camera Error:", err);
-            showMessage("Camera access denied. Please check permissions.", "error");
+            showMessage("Camera access denied.", "error");
         }
     }, [showMessage]);
 
-    // Handle initial camera start once catalog is loaded
     useEffect(() => {
         if (allCardNames.length > 0 && !isScanning) {
             startCamera();
@@ -91,22 +86,36 @@ const CardScanner = ({ onCardScanned, showMessage }) => {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [allCardNames]); 
 
-    // Success Handler
     const handleScanSuccess = useCallback((cardName) => {
-        setStatus(`Found: ${cardName}`);
+        setStatus(`SUCCESS: ${cardName}`);
         lastScanTime.current = Date.now() / 1000;
         onCardScanned(cardName);
+        // Clear buffer to prevent double scans
+        recentReads.current = [];
     }, [onCardScanned]);
 
-    // 3. Scanning Loop
+    // Image Pre-processing Helper
+    const preprocessImage = (ctx, width, height) => {
+        const imageData = ctx.getImageData(0, 0, width, height);
+        const data = imageData.data;
+        // Simple binarization (high contrast black & white)
+        for (let i = 0; i < data.length; i += 4) {
+            const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
+            const val = avg > 100 ? 255 : 0; // Threshold
+            data[i] = val; // R
+            data[i + 1] = val; // G
+            data[i + 2] = val; // B
+        }
+        ctx.putImageData(imageData, 0, 0);
+    };
+
     useEffect(() => {
         let interval;
         if (isScanning && fuse) {
             interval = setInterval(async () => {
                 const now = Date.now() / 1000;
-                // Check Cooldown
                 if (now - lastScanTime.current < SCAN_COOLDOWN) {
-                    setStatus(`Success! Cooldown...`);
+                    setStatus("Cooldown...");
                     return;
                 }
 
@@ -115,55 +124,61 @@ const CardScanner = ({ onCardScanned, showMessage }) => {
                     const canvas = canvasRef.current;
                     const ctx = canvas.getContext('2d');
 
-                    if (video.videoWidth === 0 || video.videoHeight === 0) return;
+                    if (video.videoWidth === 0) return;
 
-                    // Define Region of Interest (The green box area)
-                    // We scan the top-center portion where card titles usually are
-                    const roiX = video.videoWidth * 0.2;
-                    const roiY = video.videoHeight * 0.08; 
-                    const roiW = video.videoWidth * 0.6;
-                    const roiH = video.videoHeight * 0.15;
+                    // Scan the top 20% of the video where the title usually is
+                    const roiX = video.videoWidth * 0.15;
+                    const roiY = video.videoHeight * 0.15; 
+                    const roiW = video.videoWidth * 0.7;
+                    const roiH = video.videoHeight * 0.20;
 
                     canvas.width = roiW;
                     canvas.height = roiH;
                     ctx.drawImage(video, roiX, roiY, roiW, roiH, 0, 0, roiW, roiH);
+                    
+                    // Apply contrast filter to help OCR
+                    preprocessImage(ctx, roiW, roiH);
 
-                    // Perform OCR
                     const { data: { text } } = await Tesseract.recognize(canvas, 'eng');
+                    // Clean text: keep only letters and spaces
                     const cleaned = text.replace(/[^a-zA-Z\s]/g, '').trim();
-
-                    // Debug log to see what Tesseract is seeing
-                    if (cleaned.length > 0) {
-                        // console.log("OCR Saw:", cleaned); 
-                    }
-
+                    
                     if (cleaned.length > 3) {
+                        setDebugText(cleaned.substring(0, 20)); // Show user what we see
                         const results = fuse.search(cleaned);
                         
-                        // Check if we found a match within our threshold
                         if (results.length > 0 && results[0].score < MATCH_THRESHOLD) { 
                             const match = results[0].item;
                             recentReads.current.push(match);
                             
-                            // Check for consecutive matches (validation)
                             if (recentReads.current.length >= REQUIRED_CONSECUTIVE_MATCHES) {
-                                const allSame = recentReads.current.every(val => val === match);
-                                if (allSame) {
-                                    handleScanSuccess(match);
-                                    recentReads.current = []; // Clear buffer after success
-                                } else {
-                                    recentReads.current.shift(); // Keep buffer small
+                                // Check if recent reads mostly agree
+                                const counts = {};
+                                let maxCount = 0;
+                                let bestGuess = null;
+                                
+                                recentReads.current.forEach(val => {
+                                    counts[val] = (counts[val] || 0) + 1;
+                                    if (counts[val] > maxCount) {
+                                        maxCount = counts[val];
+                                        bestGuess = val;
+                                    }
+                                });
+
+                                if (maxCount >= REQUIRED_CONSECUTIVE_MATCHES) {
+                                    handleScanSuccess(bestGuess);
                                 }
+                                // Keep buffer small
+                                if(recentReads.current.length > 5) recentReads.current.shift();
                             }
                         }
                     }
                 }
-            }, 600); // Scan interval (ms)
+            }, 500); // Check twice a second
         }
         return () => clearInterval(interval);
     }, [isScanning, fuse, handleScanSuccess]);
 
-    // Camera Switcher
     const switchCamera = () => {
         if (cameras.length > 1) {
             const currentIndex = cameras.findIndex(c => c.deviceId === activeCameraId);
@@ -176,46 +191,35 @@ const CardScanner = ({ onCardScanned, showMessage }) => {
 
     return (
         <div className="flex flex-col items-center w-full h-full bg-black rounded-xl overflow-hidden relative">
-            {/* Camera View */}
             <div className="relative w-full aspect-video bg-gray-900">
-                <video 
-                    ref={videoRef} 
-                    className="w-full h-full object-cover" 
-                    playsInline 
-                    muted 
-                />
+                <video ref={videoRef} className="w-full h-full object-cover" playsInline muted />
                 
-                {/* Overlay UI */}
                 <div className="absolute inset-0 pointer-events-none flex flex-col items-center">
-                    {/* Top Status Bar */}
-                    <div className="w-full p-2 bg-black/50 text-white text-center text-sm font-mono backdrop-blur-sm transition-all">
+                    <div className="w-full p-2 bg-black/70 text-white text-center text-sm font-mono backdrop-blur-md border-b border-gray-700">
                         {status}
                     </div>
 
-                    {/* Guidelines - The Green Box */}
-                    <div className={`mt-8 w-[80%] h-[15%] border-2 rounded-lg shadow-[0_0_20px_rgba(74,222,128,0.5)] relative transition-colors ${status.includes('Found') || status.includes('Success') ? 'border-green-500 bg-green-500/10' : 'border-white/50'}`}>
-                        <div className="absolute -top-5 left-1/2 -translate-x-1/2 text-white/80 text-xs font-bold bg-black/70 px-2 rounded">
-                            CARD TITLE HERE
+                    {/* Guidelines */}
+                    <div className={`mt-12 w-[70%] h-[20%] border-4 rounded-lg shadow-[0_0_30px_rgba(0,0,0,0.5)] relative transition-colors ${status.includes('SUCCESS') ? 'border-green-400 bg-green-500/20' : 'border-white/40'}`}>
+                        <div className="absolute -top-6 left-1/2 -translate-x-1/2 text-white/90 text-xs font-bold bg-black/60 px-3 py-1 rounded-full uppercase tracking-wider">
+                            Card Title
                         </div>
                     </div>
 
-                    {/* Instructions */}
-                    <div className="mt-auto mb-4 bg-black/60 px-4 py-2 rounded-full text-white/80 text-xs">
-                        Hold steady. Good lighting is key.
+                    <div className="mt-auto mb-4 bg-black/60 px-4 py-2 rounded-full text-gray-300 text-xs font-mono">
+                         Saw: <span className="text-white font-bold">{debugText || "..."}</span>
                     </div>
                 </div>
             </div>
 
-            {/* Controls */}
             <div className="flex gap-4 mt-4 mb-2">
                 {cameras.length > 1 && (
-                    <button onClick={switchCamera} className="p-3 bg-gray-700 rounded-full text-white hover:bg-gray-600 transition-colors" title="Switch Camera">
+                    <button onClick={switchCamera} className="p-3 bg-gray-700 rounded-full text-white hover:bg-gray-600 transition-colors">
                         <RefreshCw size={24} />
                     </button>
                 )}
             </div>
-
-            {/* Hidden Canvas for Processing */}
+            
             <canvas ref={canvasRef} className="hidden" />
         </div>
     );
