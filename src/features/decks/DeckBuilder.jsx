@@ -273,7 +273,6 @@ const DeckBuilder = ({ tcg, config, collection, decks, setDecks, activeDeckId, s
                              {activeDeck.format === 'commander' &&
                                 <button onClick={() => setCommanderModalOpen(true)} className="flex items-center gap-2 px-4 py-2 bg-yellow-600 text-white rounded hover:bg-yellow-500 text-xs"><Crown size={14} /> Set Commander</button>
                             }
-                             <button onClick={() => handleDeleteClick(activeDeck.id)} className="p-2 text-red-400 hover:text-red-300"><Trash2 size={18}/></button>
                         </div>
                     )}
                  </div>
