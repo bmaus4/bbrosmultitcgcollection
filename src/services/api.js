@@ -1,4 +1,5 @@
 const TCG_APIS = {
+    // UPDATED: Added +unique:prints to get every specific version
     mtg: 'https://api.scryfall.com/cards/search?q=',
     pokemon: 'https://api.pokemontcg.io/v2/cards?q=name:',
     yugioh: 'https://db.ygoprodeck.com/api/v7/cardinfo.php?fname='
@@ -8,7 +9,8 @@ const TCG_APIS = {
 
 export const searchCard = async (tcg, cardName) => {
     // For MTG, search for exact name to get all versions
-    const query = tcg === 'mtg' ? `!"${cardName}"` : encodeURIComponent(cardName);
+    // UPDATED: Added unique:prints to the query
+    const query = tcg === 'mtg' ? `!"${cardName}"+unique:prints` : encodeURIComponent(cardName);
     const url = `${TCG_APIS[tcg]}${query}`;
     
     const response = await fetch(url);
@@ -118,8 +120,7 @@ const callGeminiAPI = async (prompt) => {
     const apiKey = process.env.REACT_APP_GEMINI_API_KEY;
     if (!apiKey) throw new Error("Gemini API Key missing. Please check your .env or Netlify settings.");
 
-    // Using the stable flash model
-    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${apiKey}`;
+    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
 
     const payload = {
         contents: [{ role: "user", parts: [{ text: prompt }] }]
@@ -140,21 +141,41 @@ const callGeminiAPI = async (prompt) => {
     return result.candidates?.[0]?.content?.parts?.[0]?.text || "";
 };
 
-export const getGeminiDeckAnalysis = async (activeDeck) => {
+export const getGeminiDeckAnalysis = async (activeDeck, collection) => {
     const cardList = activeDeck.cards.map(c => `${c.quantity}x ${c.name}`).join(', ');
     const commanderName = activeDeck.commander ? activeDeck.commander.name : "None";
+
+    const collectionSample = collection
+        .filter(c => c.rarity !== 'common' && c.rarity !== 'uncommon')
+        .slice(0, 50)
+        .map(c => c.name)
+        .join(', ');
+
+    let task = "";
+    if (activeDeck.cards.reduce((acc, c) => acc + c.quantity, 0) > 100) {
+        task = `The deck is OVER 100 cards. You MUST suggest specific cuts to reach 100. Do not suggest additions.`;
+    } else {
+        task = `Suggest 3 card additions from the available collection, and 3 to buy.`;
+    }
 
     const prompt = `Analyze this Magic: The Gathering deck.
     Format: ${activeDeck.format}
     Commander: ${commanderName}
     Cards: ${cardList}
     
-    1. Determine the Power Level Bracket (Exhibition, Core, Upgraded, Optimized, or cEDH).
-    2. Analyze consistency, win cons, and interaction.
-    3. Suggest 3 specific card additions to improve the deck.
-    4. Suggest 3 cuts.
+    Collection Sample: ${collectionSample}
     
-    Format using simple HTML tags (<b>, <ul>, <li>) for readability.`;
+    Task: ${task}
+    
+    1. Determine Power Level Bracket.
+    2. Analyze consistency/win cons.
+    3. Recommendations.
+    
+    CRITICAL FORMATTING INSTRUCTION:
+    - You MUST wrap EVERY card name in double brackets like this: [[Sol Ring]], [[Arcane Signet]]. 
+    - This is required for the card preview feature to work.
+    - Use HTML tags (<b>, <ul>, <li>) for structure.
+    `;
 
     const response = await callGeminiAPI(prompt);
     if (!response) throw new Error("AI returned an empty analysis.");
@@ -164,14 +185,9 @@ export const getGeminiDeckAnalysis = async (activeDeck) => {
 export const generateDeckWithGemini = async (collection, format, commander) => {
     const available = collection.map(c => `${c.quantity}x ${c.name}`).join('\n');
     
-    let prompt = `Act as an expert MTG deck builder. Build a ${format} deck using ONLY the following available cards:
+    const prompt = `Act as an expert MTG deck builder. Build a ${format} deck using ONLY the following available cards:
     ${available}
-    
-    Rules:
-    - Format: ${format}
-    ${commander ? `- Commander: ${commander.name} (Cards must match color identity)` : ''}
-    - Standard: Max 4 copies.
-    - Commander: Singleton (1 copy), 100 cards total.
+    ${commander ? `Commander: ${commander.name}` : ''}
     
     Return ONLY the decklist in "Quantity x Card Name" format. No intro text.`;
 
@@ -189,13 +205,12 @@ export const askMtgRules = async (question, contextCards = []) => {
     const prompt = `You are a Level 3 Magic Judge. Answer this rule question: "${question}"
     ${context}
     
-    Be concise. Cite rules if necessary. Use HTML for formatting.`;
+    Be concise. Wrap card names in [[brackets]] like [[Black Lotus]]. Use HTML for formatting.`;
 
     const response = await callGeminiAPI(prompt);
     return response || "The Judge is silent.";
 };
 
 export const getKeywordDefinitions = async (keywords) => {
-    // Local fallback to save API calls
     return keywords.map(k => ({ name: k, definition: "Keyword ability." }));
 };
