@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { X, PlusCircle, Trash2, BrainCircuit, MinusCircle, CheckCircle, Crown, Wand2, ChevronsUpDown } from 'lucide-react';
-import { Modal, Spinner, CardDetailModal, CardDisplay, CardHoverLink } from '../../components/Shared';
+import { Modal, Spinner, CardDetailModal, CardHoverLink } from '../../components/Shared';
 import { getGeminiDeckAnalysis, generateDeckWithGemini } from '../../services/api';
 
 // Re-defining CardDisplay here to include deck controls
@@ -103,7 +103,6 @@ const DeckBuilder = ({ tcg, config, collection, decks, setDecks, activeDeckId, s
         }));
     };
     
-    const handleDeleteClick = (deckId) => setConfirmDelete({ isOpen: true, deckId });
     const performDelete = () => {
         if (confirmDelete.deckId) {
             setDecks(decks.filter(d => d.id !== confirmDelete.deckId));
