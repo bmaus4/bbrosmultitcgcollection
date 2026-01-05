@@ -1,5 +1,4 @@
 const TCG_APIS = {
-    // UPDATED: Added +unique:prints to get every specific version
     mtg: 'https://api.scryfall.com/cards/search?q=',
     pokemon: 'https://api.pokemontcg.io/v2/cards?q=name:',
     yugioh: 'https://db.ygoprodeck.com/api/v7/cardinfo.php?fname='
@@ -8,8 +7,6 @@ const TCG_APIS = {
 // --- SEARCH FUNCTIONS ---
 
 export const searchCard = async (tcg, cardName) => {
-    // For MTG, search for exact name to get all versions
-    // UPDATED: Added unique:prints to the query
     const query = tcg === 'mtg' ? `!"${cardName}"+unique:prints` : encodeURIComponent(cardName);
     const url = `${TCG_APIS[tcg]}${query}`;
     
@@ -142,20 +139,27 @@ const callGeminiAPI = async (prompt) => {
 };
 
 export const getGeminiDeckAnalysis = async (activeDeck, collection) => {
+    const cardCount = activeDeck.cards.reduce((acc, c) => acc + c.quantity, 0);
     const cardList = activeDeck.cards.map(c => `${c.quantity}x ${c.name}`).join(', ');
     const commanderName = activeDeck.commander ? activeDeck.commander.name : "None";
-
+    
+    // Sample collection for recommendations
     const collectionSample = collection
-        .filter(c => c.rarity !== 'common' && c.rarity !== 'uncommon')
-        .slice(0, 50)
+        .filter(c => !activeDeck.cards.find(dc => dc.name === c.name)) // Exclude cards already in deck
+        .filter(c => c.rarity === 'rare' || c.rarity === 'mythic')
+        .slice(0, 60)
         .map(c => c.name)
         .join(', ');
 
-    let task = "";
-    if (activeDeck.cards.reduce((acc, c) => acc + c.quantity, 0) > 100) {
-        task = `The deck is OVER 100 cards. You MUST suggest specific cuts to reach 100. Do not suggest additions.`;
+    let taskInstruction = "";
+    if (cardCount > 100 && activeDeck.format === 'commander') {
+        taskInstruction = `The deck has ${cardCount} cards (Limit 100). Suggest exactly ${cardCount - 100} cuts to make it legal. Do NOT suggest additions.`;
     } else {
-        task = `Suggest 3 card additions from the available collection, and 3 to buy.`;
+        taskInstruction = `
+        1. Suggest 3-5 specific card additions from the "Available Collection" below.
+        2. Suggest 3-5 cards to buy (Outside Collection) that are high synergy.
+        3. For every addition, suggest a specific cut to maintain the deck size.
+        If the collection sample has no good cards, state "No better cards in collection."`;
     }
 
     const prompt = `Analyze this Magic: The Gathering deck.
@@ -163,18 +167,17 @@ export const getGeminiDeckAnalysis = async (activeDeck, collection) => {
     Commander: ${commanderName}
     Cards: ${cardList}
     
-    Collection Sample: ${collectionSample}
+    Available Collection Sample: ${collectionSample}
     
-    Task: ${task}
+    Task: ${taskInstruction}
     
-    1. Determine Power Level Bracket.
-    2. Analyze consistency/win cons.
-    3. Recommendations.
+    Also:
+    - Determine Power Level Bracket (Exhibition, Core, Upgraded, Optimized, cEDH).
+    - Analyze consistency and win cons.
     
-    CRITICAL FORMATTING INSTRUCTION:
-    - You MUST wrap EVERY card name in double brackets like this: [[Sol Ring]], [[Arcane Signet]]. 
-    - This is required for the card preview feature to work.
-    - Use HTML tags (<b>, <ul>, <li>) for structure.
+    CRITICAL FORMATTING:
+    - Return ONLY valid HTML (using <h3>, <ul>, <li>, <strong>, <p>). Do NOT use Markdown (no ###, no **).
+    - Wrap EVERY card name in double brackets like [[Sol Ring]] to enable preview hovers.
     `;
 
     const response = await callGeminiAPI(prompt);
@@ -185,11 +188,26 @@ export const getGeminiDeckAnalysis = async (activeDeck, collection) => {
 export const generateDeckWithGemini = async (collection, format, commander) => {
     const available = collection.map(c => `${c.quantity}x ${c.name}`).join('\n');
     
-    const prompt = `Act as an expert MTG deck builder. Build a ${format} deck using ONLY the following available cards:
+    let prompt = `Act as an EDHREC-powered deck builder. Build the best possible ${format} deck for ${commander ? commander.name : 'the chosen format'} using ONLY the following available cards:
     ${available}
-    ${commander ? `Commander: ${commander.name}` : ''}
     
-    Return ONLY the decklist in "Quantity x Card Name" format. No intro text.`;
+    Rules:
+    - Commander: Singleton, 100 cards total (if possible), strict color identity.
+    - Strategy: Maximize synergy, ramp, and draw based on EDHREC top stats.
+    
+    Output Format:
+    Return the response in two distinct sections separated by exactly "---SPLIT---".
+    
+    Section 1: The Decklist
+    - Format: "Quantity x Card Name" (one per line).
+    - ONLY use cards from the provided list.
+    - If you run out of good cards (e.g. only reach 70 cards), STOP. Do not add bad cards just to fill space.
+    
+    Section 2: Recommendations
+    - If the deck is incomplete (<100 cards), suggest specific cards to buy to finish it.
+    - Explain the general strategy.
+    - Return this section as valid HTML (<h3>, <ul>, <li>, <p>). Wrap card names in [[brackets]].
+    `;
 
     const response = await callGeminiAPI(prompt);
     if (!response) throw new Error("AI could not generate a deck.");
@@ -205,7 +223,7 @@ export const askMtgRules = async (question, contextCards = []) => {
     const prompt = `You are a Level 3 Magic Judge. Answer this rule question: "${question}"
     ${context}
     
-    Be concise. Wrap card names in [[brackets]] like [[Black Lotus]]. Use HTML for formatting.`;
+    Be concise. Cite rules if necessary. Return valid HTML (no Markdown). Wrap card names in [[brackets]].`;
 
     const response = await callGeminiAPI(prompt);
     return response || "The Judge is silent.";
