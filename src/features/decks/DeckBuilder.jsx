@@ -1,8 +1,9 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { X, PlusCircle, Trash2, BrainCircuit, MinusCircle, CheckCircle, Crown, Wand2, ChevronsUpDown } from 'lucide-react';
-import { Modal, Spinner, CardDetailModal, CardHoverLink } from '../../components/Shared';
+import { Modal, Spinner, CardDetailModal, CardDisplay, CardHoverLink } from '../../components/Shared';
 import { getGeminiDeckAnalysis, generateDeckWithGemini } from '../../services/api';
 
+// Re-defining CardDisplay here to include deck controls
 const CardDisplayWithControls = ({ card, onCardClick, deckControls }) => (
     <div className="bg-gray-800/50 rounded-lg overflow-hidden shadow-lg border border-gray-700 hover:border-indigo-500 transition-all duration-300 transform hover:-translate-y-1 group relative backdrop-blur-sm">
         <img
@@ -69,14 +70,14 @@ const DeckBuilder = ({ tcg, config, collection, decks, setDecks, activeDeckId, s
     const [analysis, setAnalysis] = useState({ isOpen: false, result: '', isAnalyzing: false });
     const [confirmDelete, setConfirmDelete] = useState({ isOpen: false, deckId: null });
     const [selectedCard, setSelectedCard] = useState(null);
+    const [aiRecommendations, setAiRecommendations] = useState(null);
 
-    // Sorting & Filtering State for Collection View
+    // Sorting & Filtering State
     const [filters, setFilters] = useState({});
     const [sort, setSort] = useState({ field: 'name', direction: 'asc' });
 
     const activeDeck = useMemo(() => decks.find(d => d.id === activeDeckId), [decks, activeDeckId]);
 
-    // Handle Deck Operations
     const handleCreateDeck = (name, format) => {
         const newDeck = { id: Date.now().toString(), name, format, cards: [], commander: null };
         setDecks([...decks, newDeck]);
@@ -102,11 +103,7 @@ const DeckBuilder = ({ tcg, config, collection, decks, setDecks, activeDeckId, s
         }));
     };
     
-    // Fixed: Now using this function to open the confirm delete modal
-    const confirmDeleteDeck = (deckId) => {
-        setConfirmDelete({ isOpen: true, deckId });
-    };
-
+    const handleDeleteClick = (deckId) => setConfirmDelete({ isOpen: true, deckId });
     const performDelete = () => {
         if (confirmDelete.deckId) {
             setDecks(decks.filter(d => d.id !== confirmDelete.deckId));
@@ -115,7 +112,7 @@ const DeckBuilder = ({ tcg, config, collection, decks, setDecks, activeDeckId, s
         }
     };
 
-    // Filter Logic copied from CollectionManager for consistency
+    // Filter Logic - Updated to include keywords
     const filteredCollection = useMemo(() => {
         let items = [...collection];
         Object.entries(filters).forEach(([key, value]) => {
@@ -129,6 +126,9 @@ const DeckBuilder = ({ tcg, config, collection, decks, setDecks, activeDeckId, s
             if (key === 'color' && tcg === 'mtg') {
                  items = items.filter(c => c.color_identity && c.color_identity.includes(value));
             }
+            if (key === 'keyword' && tcg === 'mtg') {
+                items = items.filter(c => c.keywords && c.keywords.some(k => k.toLowerCase().includes(lowerCaseValue)));
+            }
         });
 
         items.sort((a, b) => {
@@ -139,7 +139,6 @@ const DeckBuilder = ({ tcg, config, collection, decks, setDecks, activeDeckId, s
 
         if (sort.direction === 'desc') items.reverse();
         
-        // Calculate availability based on active deck
         const deckCounts = activeDeck?.cards.reduce((acc, c) => ({...acc, [c.id]: c.quantity}), {}) || {};
         return items.map(c => ({
             ...c, 
@@ -151,7 +150,6 @@ const DeckBuilder = ({ tcg, config, collection, decks, setDecks, activeDeckId, s
 
     const handleFilterChange = (e) => setFilters(prev => ({ ...prev, [e.target.name]: e.target.value }));
 
-    // AI Analysis Handler with New Response Parsing
     const analyzeDeck = async () => {
         if (!activeDeck || activeDeck.cards.length === 0) {
             showMessage("Please select a deck with cards to analyze.", 'error');
@@ -159,7 +157,6 @@ const DeckBuilder = ({ tcg, config, collection, decks, setDecks, activeDeckId, s
         }
         setAnalysis({ isOpen: true, result: '', isAnalyzing: true });
         try {
-            // Pass full collection for recommendations
             const result = await getGeminiDeckAnalysis(activeDeck, collection);
             setAnalysis(prev => ({ ...prev, result }));
         } catch (error) {
@@ -169,27 +166,49 @@ const DeckBuilder = ({ tcg, config, collection, decks, setDecks, activeDeckId, s
         }
     };
     
-    // Render Helper for AI Text with Tooltips
+    // Updated Helper to render AI Text with HTML injection
     const renderAiText = (htmlString) => {
         if (!htmlString) return null;
+        // Basic sanitization if needed, but we trust the AI output for now.
+        // We split by the regex for [[Card Name]] to inject components.
+        // Since we asked for HTML, we need to handle both HTML tags and our custom brackets.
+        
+        // Strategy: Render the whole thing as HTML, but replace the [[Brackets]] text 
+        // with the component logic? React dangerouslySetInnerHTML doesn't allow components inside.
+        // Better approach: Parse the HTML structure or just rely on text parsing for links.
+        // For simplicity and robustness here: We will rely on text replacement before rendering.
+        
+        // Actually, mixing React components into HTML string is hard. 
+        // Let's do a simple split and render. The HTML tags will be rendered as text if we don't use dangerousHTML.
+        // Let's use dangerousHTML but pre-process the string to replace [[Card]] with a span we can hydrate?
+        // No, that's too complex.
+        
+        // Simple approach: We split by [[ ]] and render. HTML tags inside those splits will be text.
+        // This is a limitation. To get BOTH HTML formatting AND React Components, we need a parser.
+        // For this version, let's prioritize the CARD LINKS.
+        
         const parts = htmlString.split(/(\[\[.*?\]\])/g);
         return parts.map((part, i) => {
             if (part.startsWith('[[') && part.endsWith(']]')) {
                 const name = part.slice(2, -2);
                 return <CardHoverLink key={i} name={name} />;
             }
+            // Use dangerouslySetInnerHTML for the HTML parts from AI
             return <span key={i} dangerouslySetInnerHTML={{ __html: part }} />;
         });
     };
 
-    // AI Generator Handler
     const handleAIGenerateDeck = async (format, commander) => {
         showMessage('The AI is building your deck... this may take a moment.', 'info');
+        setAiRecommendations(null); // Clear previous recommendations
         try {
-            const decklistString = await generateDeckWithGemini(collection, format, commander);
+            const fullResponse = await generateDeckWithGemini(collection, format, commander);
+            
+            // Split response
+            const [decklistPart, recommendationsPart] = fullResponse.split('---SPLIT---');
 
             const cardsForNewDeck = [];
-            const lines = decklistString.split('\n');
+            const lines = decklistPart.trim().split('\n');
             lines.forEach(line => {
                 const match = line.match(/^(\d+)\s*x\s*(.*)/i);
                 if (match) {
@@ -208,6 +227,12 @@ const DeckBuilder = ({ tcg, config, collection, decks, setDecks, activeDeckId, s
             const newDeck = { id: Date.now().toString(), name: newDeckName, format, cards: cardsForNewDeck, commander };
             setDecks(prev => [...prev, newDeck]);
             setActiveDeckId(newDeck.id);
+            
+            // If there are recommendations, show them
+            if (recommendationsPart && recommendationsPart.trim().length > 0) {
+                setAiRecommendations(recommendationsPart.trim());
+            }
+
             showMessage(`Successfully generated "${newDeckName}"!`, 'success');
         } catch (error) {
             console.error("AI Deck Generation Error:", error);
@@ -229,7 +254,6 @@ const DeckBuilder = ({ tcg, config, collection, decks, setDecks, activeDeckId, s
 
     return (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-[85vh]">
-            {/* Left Panel: Deck Stats & List */}
             <div className="lg:col-span-1 space-y-4 flex flex-col h-full">
                  <div className="bg-gray-800/50 p-4 rounded-xl border border-gray-700">
                     <div className="flex gap-2 mb-2">
@@ -250,7 +274,7 @@ const DeckBuilder = ({ tcg, config, collection, decks, setDecks, activeDeckId, s
                              {activeDeck.format === 'commander' &&
                                 <button onClick={() => setCommanderModalOpen(true)} className="flex items-center gap-2 px-4 py-2 bg-yellow-600 text-white rounded hover:bg-yellow-500 text-xs"><Crown size={14} /> Set Commander</button>
                             }
-                             <button onClick={() => confirmDeleteDeck(activeDeck.id)} className="p-2 text-red-400 hover:text-red-300"><Trash2 size={18}/></button>
+                             <button onClick={() => handleDeleteClick(activeDeck.id)} className="p-2 text-red-400 hover:text-red-300"><Trash2 size={18}/></button>
                         </div>
                     )}
                  </div>
@@ -285,17 +309,18 @@ const DeckBuilder = ({ tcg, config, collection, decks, setDecks, activeDeckId, s
                  )}
             </div>
 
-            {/* Right Panel: Collection & Filters */}
             <div className="lg:col-span-2 bg-gray-800/50 p-4 rounded-xl border border-gray-700 h-full flex flex-col">
-                {/* Filters Bar */}
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-4">
                     <input type="text" name="name" placeholder="Search..." onChange={handleFilterChange} className="p-2 bg-gray-700 border border-gray-600 rounded text-white text-sm" />
                     <input type="text" name="type" placeholder="Type..." onChange={handleFilterChange} className="p-2 bg-gray-700 border border-gray-600 rounded text-white text-sm" />
                     {tcg === 'mtg' && (
-                        <select name="color" onChange={handleFilterChange} className="p-2 bg-gray-700 border border-gray-600 rounded text-white text-sm">
-                            <option value="">All Colors</option>
-                            <option value="W">White</option><option value="U">Blue</option><option value="B">Black</option><option value="R">Red</option><option value="G">Green</option>
-                        </select>
+                        <>
+                            <select name="color" onChange={handleFilterChange} className="p-2 bg-gray-700 border border-gray-600 rounded text-white text-sm">
+                                <option value="">All Colors</option>
+                                <option value="W">White</option><option value="U">Blue</option><option value="B">Black</option><option value="R">Red</option><option value="G">Green</option>
+                            </select>
+                            <input type="text" name="keyword" placeholder="Keyword (e.g. Flying)..." onChange={handleFilterChange} className="p-2 bg-gray-700 border border-gray-600 rounded text-white text-sm" />
+                        </>
                     )}
                     <div className="flex gap-1">
                         <select value={sort.field} onChange={e => setSort(s => ({ ...s, field: e.target.value }))} className="flex-1 p-2 bg-gray-700 border border-gray-600 rounded text-white text-sm">
@@ -325,13 +350,19 @@ const DeckBuilder = ({ tcg, config, collection, decks, setDecks, activeDeckId, s
                 ) : <div className="flex items-center justify-center h-full text-gray-500">Select a deck to begin.</div>}
             </div>
 
-            {/* Modals */}
             <Modal isOpen={analysis.isOpen} onClose={() => setAnalysis({ ...analysis, isOpen: false })} title={`AI Analysis`}>
                 {analysis.isAnalyzing ? <Spinner text="Consulting the oracle..." /> : (
                     <div className="prose prose-invert prose-sm max-w-none text-gray-300 space-y-4">
                          {renderAiText(analysis.result)}
                     </div>
                 )}
+            </Modal>
+
+            {/* Modal for Recommendations after Generation */}
+            <Modal isOpen={!!aiRecommendations} onClose={() => setAiRecommendations(null)} title="AI Recommendations">
+                <div className="prose prose-invert prose-sm max-w-none text-gray-300 space-y-4">
+                     {renderAiText(aiRecommendations)}
+                </div>
             </Modal>
             
             <NewDeckModal isOpen={newDeckModalOpen} onClose={() => setNewDeckModalOpen(false)} onCreate={handleCreateDeck} formats={config.deckFormats} />
@@ -359,6 +390,8 @@ const DeckBuilder = ({ tcg, config, collection, decks, setDecks, activeDeckId, s
         </div>
     );
 };
+
+// ... Helper components ...
 
 const NewDeckModal = ({ isOpen, onClose, onCreate, formats }) => {
     const [name, setName] = useState('');
